@@ -26,7 +26,7 @@ var PAGE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.2' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.3' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -77,63 +77,18 @@ function _card(r) {
 }
 
 // ── Listings ─────────────────────────────────────────────────────────────────
-// DIAGNOSTIC BUILD: instead of the real home page, show what the app's own
-// network layer gets back from the site's API. Each test becomes a card whose
-// title is the result. Search / detail / playback are unchanged.
-function _probe(label, url, headers) {
-  var t0 = Date.now();
-  var p;
-  try { p = fetch(url, headers ? { headers: headers } : {}); }
-  catch (e) { return Promise.resolve({ label: label, err: String((e && e.message) || e), ms: 0 }); }
-  return p.then(function (r) {
-    var body = r && r.body != null ? String(r.body) : '';
-    var rows = null, firstId = null;
-    try {
-      var j = JSON.parse(body);
-      var list = (j && j.info && j.info.rows) || null;
-      if (list) { rows = list.length; if (list[0]) firstId = list[0].vod_id; }
-    } catch (e) {}
-    return { label: label, status: (r && r.status !== undefined) ? r.status : '?',
-      len: body.length, rows: rows, firstId: firstId,
-      head: body.slice(0, 60).replace(/\s+/g, ' '), ms: Date.now() - t0 };
-  }).catch(function (e) {
-    return { label: label, err: String((e && e.message) || e), ms: Date.now() - t0 };
-  });
-}
-
-function _dbgCards(res) {
-  var line = res.err
-    ? res.label + ' 失败 ' + res.ms + 'ms ' + String(res.err).slice(0, 40)
-    : res.label + ' 状态' + res.status + ' ' + (res.rows === null ? '非列表' : res.rows + '行')
-      + ' ' + res.len + '字节 ' + res.ms + 'ms';
-  var out = [{ id: 'dbg-' + res.label, title: line, cover: null, url: 'dbg', type: 'anime', sourceId: SOURCE_ID }];
-  if (!res.err) out.push({ id: 'dbg-' + res.label + 'h', title: res.label + ' 内容: ' + res.head,
-    cover: null, url: 'dbg', type: 'anime', sourceId: SOURCE_ID });
-  return out;
-}
-
+// Two short rows only: the app uses row[0] as the hero carousel.
 function getHome(opts) {
-  var q = encodeURIComponent('黑色五叶草');
-  var H = { 'User-Agent': UA, 'Referer': SITE + '/' };
-  return Promise.all([
-    _probe('A无头搜索', API + '/get_list?vod_name=' + q + '&offset=0&limit=24', null),
-    _probe('B有头搜索', API + '/get_list?vod_name=' + q + '&offset=0&limit=24', H),
-    _probe('C无关键词', API + '/get_list?offset=0&limit=12', null),
-  ]).then(function (res) {
-    var id = res[0].firstId || res[2].firstId;
-    return _probe('D详情', API + '/get_detail?vod_id=' + encodeURIComponent(id || 1), null)
-      .then(function (d) { res.push(d); return res; });
-  }).then(function (res) {
-    var items = [];
-    for (var i = 0; i < res.length; i++) items = items.concat(_dbgCards(res[i]));
-    return [
-      { title: '诊断 1', items: items.slice(0, 4) },
-      { title: '诊断 2', items: items.slice(4) },
-    ].filter(function (r) { return r.items.length; });
-  }).catch(function (e) {
-    return [{ title: '诊断失败', items: [{ id: 'dbg-x', title: String((e && e.message) || e),
-      cover: null, url: 'dbg', type: 'anime', sourceId: SOURCE_ID }] }];
-  });
+  // Small request on purpose: this API returns every field (full synopsis too)
+  // for each row, and the app gives a source only a few seconds to answer.
+  return _json(API + '/get_list?offset=0&limit=12').then(function (j) {
+    var cards = _rows(j).map(_card);
+    var rows = [
+      { title: '最近更新', items: cards.slice(0, 6) },
+      { title: '更多番剧', items: cards.slice(6) },
+    ];
+    return rows.filter(function (r) { return r.items.length; });
+  }).catch(function () { return []; });
 }
 
 function popular(opts) {
