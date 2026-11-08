@@ -5,7 +5,7 @@
     {
       "id": "girigirilove",
       "name": "girigiriLove",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "type": "anime",
       "lang": "zh",
       "file": "providers/girigirilove.js",
