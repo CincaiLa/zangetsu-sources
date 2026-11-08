@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.1' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.2' };
 }
 
 function _get(url, ref) {
@@ -99,93 +99,16 @@ function popular(opts) {
   });
 }
 
-// Search the site's own API. Titles on this site are Chinese, so a romaji or
-// English query (what Zangetsu usually sends) finds nothing directly. When the
-// direct search is empty we look the title up on Bangumi (bgm.tv) to get its
-// Chinese name, then search the site with that.
-function _siteSearch(q, p) {
-  var url = API + '/get_list?vod_name=' + encodeURIComponent(q)
-    + '&offset=' + ((p - 1) * PAGE_SIZE) + '&limit=' + PAGE_SIZE;
-  return _json(url).then(function (j) { return _rows(j).map(_card); })
-    .catch(function () { return []; });
-}
-
-// Drop "Season 2" / "2nd Season" / "Part 2" noise that hurts title matching.
-function _cleanQuery(q) {
-  return String(q)
-    .replace(/\b(\d+(st|nd|rd|th)\s+season|season\s*\d+|part\s*\d+|cour\s*\d+)\b/gi, '')
-    .replace(/\s+/g, ' ').trim();
-}
-
-function _bgmTitles(q) {
-  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(q)
-    + '?type=2&responseGroup=small&max_results=5';
-  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/0.2 (personal use)' } })
-    .then(function (r) { return r.body || ''; })
-    .then(function (b) {
-      var j; try { j = JSON.parse(b); } catch (e) { return []; }
-      var list = (j && j.list) || [], out = [], seen = {};
-      for (var i = 0; i < list.length; i++) {
-        var names = [list[i].name_cn, list[i].name];
-        for (var k = 0; k < names.length; k++) {
-          var n = names[k] ? String(names[k]).trim() : '';
-          if (n && !seen[n]) { seen[n] = 1; out.push(n); }
-        }
-      }
-      return out;
-    }).catch(function () { return []; });
-}
-
-function _chineseTitles(q) {
-  return _bgmTitles(q).then(function (t) {
-    if (t.length) return t;
-    var c = _cleanQuery(q);
-    return c && c !== q ? _bgmTitles(c) : [];
-  });
-}
-
+// Search the site's own API. Titles on this site are Chinese, so Chinese
+// keywords work best.
 function search(query, page, opts) {
   var q = String(query || '').trim();
   if (!q) return Promise.resolve([]);
   var p = page && page > 0 ? page : 1;
-  return _siteSearch(q, p).then(function (direct) {
-    if (direct.length || p > 1) return direct;
-    return _chineseTitles(q).then(function (titles) {
-      if (!titles.length) return [];
-      var jobs = titles.slice(0, 4).map(function (t) { return _siteSearch(t, 1); });
-      return Promise.all(jobs).then(function (arrs) {
-        // Pick the most likely match: a result whose title equals the Bangumi
-        // title it was found with, else the first result of the first hit.
-        var best = null, a, b;
-        for (a = 0; a < arrs.length && !best; a++) {
-          for (b = 0; b < arrs[a].length; b++) {
-            if (arrs[a][b].title === titles[a]) { best = arrs[a][b]; break; }
-          }
-        }
-        for (a = 0; a < arrs.length && !best; a++) {
-          if (arrs[a].length) best = arrs[a][0];
-        }
-        var out = [], seen = {};
-        if (best) {
-          // Zangetsu auto-matches results by title similarity, and a Chinese
-          // title never resembles the Japanese/English/romaji title it searched
-          // with. Show the best match under the query's own title so it is
-          // picked automatically; keep the real title in altTitle.
-          var top = {}; for (var k in best) top[k] = best[k];
-          top.altTitle = best.title;
-          top.title = q;
-          seen[best.id] = 1; out.push(top);
-        }
-        for (a = 0; a < arrs.length; a++) {
-          for (b = 0; b < arrs[a].length; b++) {
-            var c = arrs[a][b];
-            if (!seen[c.id]) { seen[c.id] = 1; out.push(c); }
-          }
-        }
-        return out;
-      });
-    });
-  });
+  var url = API + '/get_list?vod_name=' + encodeURIComponent(q)
+    + '&offset=' + ((p - 1) * PAGE_SIZE) + '&limit=' + PAGE_SIZE;
+  return _json(url).then(function (j) { return _rows(j).map(_card); })
+    .catch(function () { return []; });
 }
 
 // ── Detail + episodes ────────────────────────────────────────────────────────
@@ -226,7 +149,7 @@ function getDetail(url, opts) {
       }
     }
     var year = info.vod_year ? parseInt(info.vod_year, 10) : null;
-    var d = {
+    return {
       id: id, title: info.vod_name || id, englishTitle: null,
       cover: _abs(info.vod_pic), url: id,
       description: _strip(info.vod_content || info.vod_blurb) || '',
@@ -234,58 +157,7 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
-    // Never make the detail wait on third-party lookups: a slow or failing
-    // Bangumi/Jikan request must not stop the episodes from loading. Use the
-    // cached MAL id / English title if we already have it, otherwise fetch it in
-    // the background so the next open of this title has it.
-    var cached = _metaCache.hasOwnProperty(d.title) ? _metaCache[d.title] : null;
-    if (cached) {
-      d.malId = cached.malId;
-      d.englishTitle = cached.english || cached.romaji || null;
-    } else {
-      _meta(d.title);
-    }
-    return d;
   });
-}
-
-// ── Metadata ids (Chinese title -> Bangumi Japanese title -> Jikan/MAL id) ───
-var _metaCache = {};
-
-function _getJson(u) {
-  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/0.3 (personal use)' } })
-    .then(function (r) { return r.body || ''; })
-    .then(function (b) { try { return JSON.parse(b); } catch (e) { return null; } })
-    .catch(function () { return null; });
-}
-
-function _meta(cn) {
-  if (!cn) return Promise.resolve(null);
-  if (_metaCache.hasOwnProperty(cn)) return Promise.resolve(_metaCache[cn]);
-  var bu = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
-    + '?type=2&responseGroup=small&max_results=5';
-  return _getJson(bu).then(function (j) {
-    var list = (j && j.list) || [], jp = null, i;
-    for (i = 0; i < list.length; i++) {
-      if (list[i].name_cn === cn && list[i].name) { jp = list[i].name; break; }
-    }
-    if (!jp && list.length && list[0].name) jp = list[0].name;
-    if (!jp) return null;
-    var ju = 'https://api.jikan.moe/v4/anime?limit=5&q=' + encodeURIComponent(jp);
-    return _getJson(ju).then(function (r) {
-      var data = (r && r.data) || [], pick = null, k;
-      for (k = 0; k < data.length; k++) {
-        if (data[k].title_japanese === jp) { pick = data[k]; break; }
-      }
-      if (!pick) pick = data[0];
-      if (!pick || !pick.mal_id) return null;
-      return { malId: pick.mal_id, english: pick.title_english || null,
-        romaji: pick.title || null };
-    });
-  }).then(function (m) {
-    if (m) _metaCache[cn] = m;
-    return m;
-  }).catch(function () { return null; });
 }
 
 function getEpisodes(url, opts) {
