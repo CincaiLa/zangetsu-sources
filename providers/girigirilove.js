@@ -26,7 +26,7 @@ var PAGE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.0' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.1' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -79,11 +79,13 @@ function _card(r) {
 // ── Listings ─────────────────────────────────────────────────────────────────
 // Two short rows only: the app uses row[0] as the hero carousel.
 function getHome(opts) {
-  return _json(API + '/get_list?offset=0&limit=' + PAGE).then(function (j) {
+  // Small request on purpose: this API returns every field (full synopsis too)
+  // for each row, and the app gives a source only a few seconds to answer.
+  return _json(API + '/get_list?offset=0&limit=12').then(function (j) {
     var cards = _rows(j).map(_card);
     var rows = [
-      { title: '最近更新', items: cards.slice(0, 12) },
-      { title: '更多番剧', items: cards.slice(12) },
+      { title: '最近更新', items: cards.slice(0, 6) },
+      { title: '更多番剧', items: cards.slice(6) },
     ];
     return rows.filter(function (r) { return r.items.length; });
   }).catch(function () { return []; });
