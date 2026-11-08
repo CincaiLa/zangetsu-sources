@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.2.0' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.2.1' };
 }
 
 function _get(url, ref) {
@@ -110,10 +110,6 @@ function _siteSearch(q, p) {
     .catch(function () { return []; });
 }
 
-function _hasCJK(s) {
-  return /[\u3040-\u30ff\u3400-\u9fff]/.test(String(s));
-}
-
 // Drop "Season 2" / "2nd Season" / "Part 2" noise that hurts title matching.
 function _cleanQuery(q) {
   return String(q)
@@ -153,7 +149,7 @@ function search(query, page, opts) {
   if (!q) return Promise.resolve([]);
   var p = page && page > 0 ? page : 1;
   return _siteSearch(q, p).then(function (direct) {
-    if (direct.length || _hasCJK(q) || p > 1) return direct;
+    if (direct.length || p > 1) return direct;
     return _chineseTitles(q).then(function (titles) {
       if (!titles.length) return [];
       var jobs = titles.slice(0, 4).map(function (t) { return _siteSearch(t, 1); });
