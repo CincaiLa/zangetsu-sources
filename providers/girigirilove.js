@@ -26,7 +26,7 @@ var PAGE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.4' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.5' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -258,7 +258,10 @@ function _sources(episodeUrl) {
     var jobs = [];
     for (var i = 0; i < roads.length; i++) {
       var ep = roads[i].eps[idx];
-      if (ep && ep.url) jobs.push(_resolve(ep.url, 0));
+      if (ep && ep.url) {
+        _note('线路' + roads[i].name + ' → ' + String(ep.url).slice(0, 50));
+        jobs.push(_resolve(ep.url, 0));
+      }
     }
     return Promise.all(jobs).then(function (groups) {
       var out = [], seen = {};
@@ -288,25 +291,35 @@ function _source(u) {
 // stream (at most two hops).
 function _resolve(raw, depth) {
   var u = _abs(raw);
-  if (!u) return Promise.resolve([]);
-  if (_isMedia(u)) return Promise.resolve([_source(u)]);
-  if (depth > 1) return Promise.resolve([]);
+  if (!u) { _note('解析: 空地址'); return Promise.resolve([]); }
+  if (_isMedia(u)) { _note('直链 ' + u.slice(-34)); return Promise.resolve([_source(u)]); }
+  if (depth > 1) { _note('解析: 层数超限'); return Promise.resolve([]); }
 
+  var t0 = Date.now();
   return _get(u, SITE + '/').then(function (html) {
     html = String(html || '');
+    _note('页面' + depth + ' ' + html.length + '字节 ' + (Date.now() - t0) + 'ms');
+    _note('开头 ' + html.slice(0, 40).replace(/\s+/g, ' '));
     var viaVar = _playerUrl(html);
+    _note(viaVar ? 'player地址 ' + String(viaVar).slice(0, 48) : '无player变量');
     if (viaVar) {
       var next = _abs(viaVar);
       if (next && _isMedia(next)) return [_source(next)];
       if (next) return _resolve(next, depth + 1);
     }
+    var ifr = html.match(/<iframe[^>]+src=["']([^"']+)/i);
+    if (ifr) _note('iframe ' + ifr[1].slice(0, 48));
     var m = html.match(/https?:\\?\/\\?\/[^"'\s<>]+?\.(?:m3u8|mp4)[^"'\s<>]*/);
     if (m) {
       var link = _abs(m[0]);
-      if (link) return [_source(link)];
+      if (link) { _note('页内链接 ' + link.slice(-40)); return [_source(link)]; }
     }
+    _note('页面里没找到m3u8/mp4');
     return [];
-  }).catch(function () { return []; });
+  }).catch(function (e) {
+    _note('解析出错 ' + String((e && e.message) || e).slice(0, 30));
+    return [];
+  });
 }
 
 // MacCMS play pages define `var player_xxxx = {..., "url": "...", "encrypt": 0|1|2}`.
@@ -366,7 +379,7 @@ function _short(v) {
 
 function _note(text) {
   _LOG.unshift({ t: _hms(), name: text, arg: '', state: '' });
-  if (_LOG.length > 14) _LOG.length = 14;
+  if (_LOG.length > 30) _LOG.length = 30;
 }
 
 function _brief(r) {
@@ -379,7 +392,7 @@ function _trace(name, arg, run) {
   var e = { t: _hms(), name: name, arg: _short(arg), state: '进行中' };
   var t0 = Date.now();
   _LOG.unshift(e);
-  if (_LOG.length > 14) _LOG.length = 14;
+  if (_LOG.length > 30) _LOG.length = 30;
   var p;
   try { p = Promise.resolve(run()); } catch (x) { p = Promise.reject(x); }
   return p.then(function (r) {
@@ -397,7 +410,7 @@ function _line(e) {
 
 function getHome(opts) {
   return _trace('getHome', '', function () { return _home(opts); }).then(function (rows) {
-    var items = _LOG.slice(0, 8).map(function (e, i) {
+    var items = _LOG.slice(0, 16).map(function (e, i) {
       return { id: 'log-' + i, title: _line(e), cover: null, url: 'log',
         type: 'anime', sourceId: SOURCE_ID };
     });
