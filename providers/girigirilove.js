@@ -26,19 +26,19 @@ var PAGE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.3' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.4' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 function _get(url, ref) {
   return fetch(url, { headers: { 'User-Agent': UA, 'Referer': ref || SITE + '/' } })
     .then(function (r) { return r.body || ''; })
-    .catch(function () { return ''; });
+    .catch(function (e) { _note('网络失败 ' + String(url).slice(-30) + ' ' + String((e && e.message) || e).slice(0, 20)); return ''; });
 }
 
 function _json(url, ref) {
   return _get(url, ref).then(function (b) {
-    try { return JSON.parse(b); } catch (e) { return null; }
+    try { return JSON.parse(b); } catch (e) { _note('非JSON ' + String(b).slice(0, 24).replace(/\s+/g, ' ')); return null; }
   });
 }
 
@@ -78,7 +78,7 @@ function _card(r) {
 
 // ── Listings ─────────────────────────────────────────────────────────────────
 // Two short rows only: the app uses row[0] as the hero carousel.
-function getHome(opts) {
+function _home(opts) {
   // Small request on purpose: this API returns every field (full synopsis too)
   // for each row, and the app gives a source only a few seconds to answer.
   return _json(API + '/get_list?offset=0&limit=12').then(function (j) {
@@ -92,7 +92,7 @@ function getHome(opts) {
 }
 
 function popular(opts) {
-  return getHome(opts).then(function (rows) {
+  return _home(opts).then(function (rows) {
     var out = [];
     for (var i = 0; i < rows.length; i++) out = out.concat(rows[i].items);
     return out;
@@ -143,7 +143,7 @@ function _lookup(q) {
   });
 }
 
-function search(query, page, opts) {
+function _search(query, page, opts) {
   var q = String(query || '').trim();
   if (!q) return Promise.resolve([]);
   var pg = page && page > 0 ? page : 1;
@@ -214,7 +214,7 @@ function _info(id) {
   });
 }
 
-function getDetail(url, opts) {
+function _detail(url, opts) {
   var id = String(url);
   return _info(id).then(function (info) {
     var roads = _roads(info);
@@ -241,12 +241,12 @@ function getDetail(url, opts) {
   });
 }
 
-function getEpisodes(url, opts) {
-  return getDetail(url, opts).then(function (d) { return d.episodes; });
+function _episodes(url, opts) {
+  return _detail(url, opts).then(function (d) { return d.episodes; });
 }
 
 // ── Streams ──────────────────────────────────────────────────────────────────
-function getVideoSources(episodeUrl) {
+function _sources(episodeUrl) {
   var raw = String(episodeUrl).replace('girigiri://', '');
   var cut = raw.indexOf('|');
   if (cut < 0) return Promise.reject(new Error('girigiriLove: bad episode url'));
@@ -347,4 +347,76 @@ function _decode(url, encrypt) {
     if (e === 2) return _unescape(_base64(url));
   } catch (err) { /* use the raw value */ }
   return String(url);
+}
+
+
+// ── TRACE BUILD: a call log shown as the last row of the home page ───────────
+var _LOG = [];
+
+function _hms() {
+  var d = new Date();
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function _short(v) {
+  var t = typeof v === 'string' ? v : JSON.stringify(v);
+  return t == null ? '' : String(t).slice(0, 28);
+}
+
+function _note(text) {
+  _LOG.unshift({ t: _hms(), name: text, arg: '', state: '' });
+  if (_LOG.length > 14) _LOG.length = 14;
+}
+
+function _brief(r) {
+  if (r && typeof r.length === 'number') return r.length + '项';
+  if (r && r.episodes) return r.episodes.length + '集';
+  return 'ok';
+}
+
+function _trace(name, arg, run) {
+  var e = { t: _hms(), name: name, arg: _short(arg), state: '进行中' };
+  var t0 = Date.now();
+  _LOG.unshift(e);
+  if (_LOG.length > 14) _LOG.length = 14;
+  var p;
+  try { p = Promise.resolve(run()); } catch (x) { p = Promise.reject(x); }
+  return p.then(function (r) {
+    e.state = _brief(r) + ' ' + (Date.now() - t0) + 'ms';
+    return r;
+  }, function (x) {
+    e.state = 'ERR ' + String((x && x.message) || x).slice(0, 40) + ' ' + (Date.now() - t0) + 'ms';
+    throw x;
+  });
+}
+
+function _line(e) {
+  return e.t + ' ' + e.name + (e.arg ? '(' + e.arg + ')' : '') + ' ' + e.state;
+}
+
+function getHome(opts) {
+  return _trace('getHome', '', function () { return _home(opts); }).then(function (rows) {
+    var items = _LOG.slice(0, 8).map(function (e, i) {
+      return { id: 'log-' + i, title: _line(e), cover: null, url: 'log',
+        type: 'anime', sourceId: SOURCE_ID };
+    });
+    return (rows || []).concat([{ title: '调用记录', items: items }]);
+  });
+}
+
+function search(query, page, opts) {
+  return _trace('search', query, function () { return _search(query, page, opts); });
+}
+
+function getDetail(url, opts) {
+  return _trace('getDetail', url, function () { return _detail(url, opts); });
+}
+
+function getEpisodes(url, opts) {
+  return _trace('getEpisodes', url, function () { return _episodes(url, opts); });
+}
+
+function getVideoSources(episodeUrl) {
+  return _trace('getVideoSources', episodeUrl, function () { return _sources(episodeUrl); });
 }
