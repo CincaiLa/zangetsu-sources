@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.2' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.3' };
 }
 
 function _get(url, ref) {
@@ -73,17 +73,10 @@ function _rows(j) {
 }
 
 // ── Listings ─────────────────────────────────────────────────────────────────
+// TEST BUILD: the home page returns nothing, so Zangetsu has no source cards to
+// look up on AniList when this source is enabled. Search/detail/play still work.
 function getHome(opts) {
-  return _json(API + '/get_list?offset=0&limit=' + (PAGE_SIZE * 2)).then(function (j) {
-    var cards = _rows(j).map(_card);
-    if (!cards.length) return [];
-    // The app uses row[0] as the hero carousel, so give it a second row too.
-    var rows = [
-      { title: '最近更新', items: cards.slice(0, PAGE_SIZE) },
-      { title: '更多番剧', items: cards.slice(PAGE_SIZE) },
-    ];
-    return rows.filter(function (r) { return r.items.length; });
-  }).catch(function () { return []; });
+  return Promise.resolve([]);
 }
 
 function popular(opts) {
