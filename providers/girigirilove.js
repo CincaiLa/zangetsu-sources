@@ -11,9 +11,7 @@
 // "$$$", episodes by "#", and each episode is "name$link".
 //
 // Episode links may be direct .m3u8/.mp4 files or play pages; _resolve() handles
-// both. This source never calls AniList. The only third-party request it makes is
-// a Bangumi lookup (search only) to turn a Japanese/English/romaji title into the
-// Chinese title this site uses.
+// both. This source only talks to girigirilove (no AniList, no Bangumi).
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
   ? String(__SOURCE_ID) : 'girigirilove';
@@ -27,7 +25,7 @@ var PAGE = 24;
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.1.0' };
+    type: 'anime', version: '1.1.1' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -108,89 +106,13 @@ function _siteSearch(q, page) {
     .catch(function () { return []; });
 }
 
-// Bangumi lookup: title in any language -> candidate Chinese/Japanese names.
-function _bgmTitles(q) {
-  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(q)
-    + '?type=2&responseGroup=small&max_results=5';
-  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/1.0 (personal use)' } })
-    .then(function (r) { return r.body || ''; })
-    .then(function (b) {
-      var j; try { j = JSON.parse(b); } catch (e) { return []; }
-      var list = (j && j.list) || [], out = [], seen = {};
-      for (var i = 0; i < list.length; i++) {
-        var names = [list[i].name_cn, list[i].name];
-        for (var k = 0; k < names.length; k++) {
-          var n = names[k] ? String(names[k]).trim() : '';
-          if (n && !seen[n]) { seen[n] = 1; out.push(n); }
-        }
-      }
-      return out;
-    })
-    .catch(function () { return []; });
-}
-
-// Drop "Season 2" / "2nd Season" / "Part 2" noise before the Bangumi lookup.
-function _plain(q) {
-  return String(q)
-    .replace(/\b(\d+(st|nd|rd|th)\s+season|season\s*\d+|part\s*\d+|cour\s*\d+)\b/gi, '')
-    .replace(/\s+/g, ' ').trim();
-}
-
-function _lookup(q) {
-  return _bgmTitles(q).then(function (t) {
-    if (t.length) return t;
-    var p = _plain(q);
-    return p && p !== q ? _bgmTitles(p) : [];
-  });
-}
-
+// Search the site's own API with the title exactly as given. Titles on this site
+// are Chinese, so Chinese keywords are what match.
 function search(query, page, opts) {
   var q = String(query || '').trim();
   if (!q) return Promise.resolve([]);
   var pg = page && page > 0 ? page : 1;
-
-  return _siteSearch(q, pg).then(function (direct) {
-    if (direct.length || pg > 1) return direct;
-
-    return _lookup(q).then(function (titles) {
-      if (!titles.length) return [];
-      var picked = titles.slice(0, 4);
-      return Promise.all(picked.map(function (t) { return _siteSearch(t, 1); }))
-        .then(function (groups) {
-          // Best match: a result whose title equals the Bangumi title it was
-          // found with; otherwise the first result of the first group.
-          var best = null, a, b;
-          for (a = 0; a < groups.length && !best; a++) {
-            for (b = 0; b < groups[a].length; b++) {
-              if (groups[a][b].title === picked[a]) { best = groups[a][b]; break; }
-            }
-          }
-          for (a = 0; a < groups.length && !best; a++) {
-            if (groups[a].length) best = groups[a][0];
-          }
-
-          var out = [], seen = {};
-          if (best) {
-            // Zangetsu auto-matches results to its own (Japanese/English/romaji)
-            // title by similarity; a Chinese title never resembles it. List the
-            // best match under the query's own title so it is picked up.
-            var top = {};
-            for (var key in best) top[key] = best[key];
-            top.altTitle = best.title;
-            top.title = q;
-            seen[best.id] = 1;
-            out.push(top);
-          }
-          for (a = 0; a < groups.length; a++) {
-            for (b = 0; b < groups[a].length; b++) {
-              var c = groups[a][b];
-              if (!seen[c.id]) { seen[c.id] = 1; out.push(c); }
-            }
-          }
-          return out;
-        });
-    });
-  });
+  return _siteSearch(q, pg);
 }
 
 // ── Detail + episodes ────────────────────────────────────────────────────────
