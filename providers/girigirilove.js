@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.2.2' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.0' };
 }
 
 function _get(url, ref) {
@@ -226,7 +226,7 @@ function getDetail(url, opts) {
       }
     }
     var year = info.vod_year ? parseInt(info.vod_year, 10) : null;
-    return {
+    var d = {
       id: id, title: info.vod_name || id, englishTitle: null,
       cover: _abs(info.vod_pic), url: id,
       description: _strip(info.vod_content || info.vod_blurb) || '',
@@ -234,7 +234,52 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
+    // Give Zangetsu something it can match to AniList/MAL: the MAL id and the
+    // English/romaji title, looked up from the Chinese title.
+    return _meta(d.title).then(function (m) {
+      if (m) { d.malId = m.malId; d.englishTitle = m.english || m.romaji || null; }
+      return d;
+    }).catch(function () { return d; });
   });
+}
+
+// ── Metadata ids (Chinese title -> Bangumi Japanese title -> Jikan/MAL id) ───
+var _metaCache = {};
+
+function _getJson(u) {
+  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/0.3 (personal use)' } })
+    .then(function (r) { return r.body || ''; })
+    .then(function (b) { try { return JSON.parse(b); } catch (e) { return null; } })
+    .catch(function () { return null; });
+}
+
+function _meta(cn) {
+  if (!cn) return Promise.resolve(null);
+  if (_metaCache.hasOwnProperty(cn)) return Promise.resolve(_metaCache[cn]);
+  var bu = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
+    + '?type=2&responseGroup=small&max_results=5';
+  return _getJson(bu).then(function (j) {
+    var list = (j && j.list) || [], jp = null, i;
+    for (i = 0; i < list.length; i++) {
+      if (list[i].name_cn === cn && list[i].name) { jp = list[i].name; break; }
+    }
+    if (!jp && list.length && list[0].name) jp = list[0].name;
+    if (!jp) return null;
+    var ju = 'https://api.jikan.moe/v4/anime?limit=5&q=' + encodeURIComponent(jp);
+    return _getJson(ju).then(function (r) {
+      var data = (r && r.data) || [], pick = null, k;
+      for (k = 0; k < data.length; k++) {
+        if (data[k].title_japanese === jp) { pick = data[k]; break; }
+      }
+      if (!pick) pick = data[0];
+      if (!pick || !pick.mal_id) return null;
+      return { malId: pick.mal_id, english: pick.title_english || null,
+        romaji: pick.title || null };
+    });
+  }).then(function (m) {
+    if (m) _metaCache[cn] = m;
+    return m;
+  }).catch(function () { return null; });
 }
 
 function getEpisodes(url, opts) {
