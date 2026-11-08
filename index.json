@@ -1,0 +1,16 @@
+{
+  "name": "My Zangetsu Sources",
+  "description": "Personal Zangetsu sources.",
+  "sources": [
+    {
+      "id": "girigirilove",
+      "name": "girigiriLove",
+      "version": "0.1.0",
+      "type": "anime",
+      "lang": "zh",
+      "file": "providers/girigirilove.js",
+      "logo": "icons/girigirilove.png",
+      "nsfw": false
+    }
+  ]
+}
