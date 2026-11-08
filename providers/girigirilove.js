@@ -25,8 +25,8 @@ var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 var PAGE = 24;
 
 function getInfo() {
-  return { name: 'girigiriLove', lang: 'zh', baseUrl: 'https://m3u8.girigirilove.com',
-    logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png', type: 'anime', version: '1.0.6' };
+  return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
+    logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png', type: 'anime', version: '1.0.7' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -421,8 +421,6 @@ function _ping(label, url) {
 }
 
 function getHome(opts) {
-  _ping('网站首页', SITE + '/');
-  _ping('接口根', 'https://m3u8.girigirilove.com/');
   return _trace('getHome', '', function () { return _home(opts); }).then(function (rows) {
     var items = _LOG.slice(0, 16).map(function (e, i) {
       return { id: 'log-' + i, title: _line(e), cover: null, url: 'log',
