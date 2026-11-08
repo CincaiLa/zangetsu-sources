@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.1.0' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.2.0' };
 }
 
 function _get(url, ref) {
@@ -99,16 +99,76 @@ function popular(opts) {
   });
 }
 
-// Search the site's own API. Titles on this site are Chinese, so Chinese
-// keywords work best.
-function search(query, page, opts) {
-  var q = String(query || '').trim();
-  if (!q) return Promise.resolve([]);
-  var p = page && page > 0 ? page : 1;
+// Search the site's own API. Titles on this site are Chinese, so a romaji or
+// English query (what Zangetsu usually sends) finds nothing directly. When the
+// direct search is empty we look the title up on Bangumi (bgm.tv) to get its
+// Chinese name, then search the site with that.
+function _siteSearch(q, p) {
   var url = API + '/get_list?vod_name=' + encodeURIComponent(q)
     + '&offset=' + ((p - 1) * PAGE_SIZE) + '&limit=' + PAGE_SIZE;
   return _json(url).then(function (j) { return _rows(j).map(_card); })
     .catch(function () { return []; });
+}
+
+function _hasCJK(s) {
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(String(s));
+}
+
+// Drop "Season 2" / "2nd Season" / "Part 2" noise that hurts title matching.
+function _cleanQuery(q) {
+  return String(q)
+    .replace(/\b(\d+(st|nd|rd|th)\s+season|season\s*\d+|part\s*\d+|cour\s*\d+)\b/gi, '')
+    .replace(/\s+/g, ' ').trim();
+}
+
+function _bgmTitles(q) {
+  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(q)
+    + '?type=2&responseGroup=small&max_results=5';
+  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/0.2 (personal use)' } })
+    .then(function (r) { return r.body || ''; })
+    .then(function (b) {
+      var j; try { j = JSON.parse(b); } catch (e) { return []; }
+      var list = (j && j.list) || [], out = [], seen = {};
+      for (var i = 0; i < list.length; i++) {
+        var names = [list[i].name_cn, list[i].name];
+        for (var k = 0; k < names.length; k++) {
+          var n = names[k] ? String(names[k]).trim() : '';
+          if (n && !seen[n]) { seen[n] = 1; out.push(n); }
+        }
+      }
+      return out;
+    }).catch(function () { return []; });
+}
+
+function _chineseTitles(q) {
+  return _bgmTitles(q).then(function (t) {
+    if (t.length) return t;
+    var c = _cleanQuery(q);
+    return c && c !== q ? _bgmTitles(c) : [];
+  });
+}
+
+function search(query, page, opts) {
+  var q = String(query || '').trim();
+  if (!q) return Promise.resolve([]);
+  var p = page && page > 0 ? page : 1;
+  return _siteSearch(q, p).then(function (direct) {
+    if (direct.length || _hasCJK(q) || p > 1) return direct;
+    return _chineseTitles(q).then(function (titles) {
+      if (!titles.length) return [];
+      var jobs = titles.slice(0, 4).map(function (t) { return _siteSearch(t, 1); });
+      return Promise.all(jobs).then(function (arrs) {
+        var out = [], seen = {};
+        for (var a = 0; a < arrs.length; a++) {
+          for (var b = 0; b < arrs[a].length; b++) {
+            var c = arrs[a][b];
+            if (!seen[c.id]) { seen[c.id] = 1; out.push(c); }
+          }
+        }
+        return out;
+      });
+    });
+  });
 }
 
 // ── Detail + episodes ────────────────────────────────────────────────────────
