@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.0' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.3.1' };
 }
 
 function _get(url, ref) {
@@ -234,12 +234,18 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
-    // Give Zangetsu something it can match to AniList/MAL: the MAL id and the
-    // English/romaji title, looked up from the Chinese title.
-    return _meta(d.title).then(function (m) {
-      if (m) { d.malId = m.malId; d.englishTitle = m.english || m.romaji || null; }
-      return d;
-    }).catch(function () { return d; });
+    // Never make the detail wait on third-party lookups: a slow or failing
+    // Bangumi/Jikan request must not stop the episodes from loading. Use the
+    // cached MAL id / English title if we already have it, otherwise fetch it in
+    // the background so the next open of this title has it.
+    var cached = _metaCache.hasOwnProperty(d.title) ? _metaCache[d.title] : null;
+    if (cached) {
+      d.malId = cached.malId;
+      d.englishTitle = cached.english || cached.romaji || null;
+    } else {
+      _meta(d.title);
+    }
+    return d;
   });
 }
 
