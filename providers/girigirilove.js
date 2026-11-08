@@ -25,7 +25,7 @@ var PAGE_SIZE = 24;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '0.2.1' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '0.2.2' };
 }
 
 function _get(url, ref) {
@@ -154,9 +154,30 @@ function search(query, page, opts) {
       if (!titles.length) return [];
       var jobs = titles.slice(0, 4).map(function (t) { return _siteSearch(t, 1); });
       return Promise.all(jobs).then(function (arrs) {
+        // Pick the most likely match: a result whose title equals the Bangumi
+        // title it was found with, else the first result of the first hit.
+        var best = null, a, b;
+        for (a = 0; a < arrs.length && !best; a++) {
+          for (b = 0; b < arrs[a].length; b++) {
+            if (arrs[a][b].title === titles[a]) { best = arrs[a][b]; break; }
+          }
+        }
+        for (a = 0; a < arrs.length && !best; a++) {
+          if (arrs[a].length) best = arrs[a][0];
+        }
         var out = [], seen = {};
-        for (var a = 0; a < arrs.length; a++) {
-          for (var b = 0; b < arrs[a].length; b++) {
+        if (best) {
+          // Zangetsu auto-matches results by title similarity, and a Chinese
+          // title never resembles the Japanese/English/romaji title it searched
+          // with. Show the best match under the query's own title so it is
+          // picked automatically; keep the real title in altTitle.
+          var top = {}; for (var k in best) top[k] = best[k];
+          top.altTitle = best.title;
+          top.title = q;
+          seen[best.id] = 1; out.push(top);
+        }
+        for (a = 0; a < arrs.length; a++) {
+          for (b = 0; b < arrs[a].length; b++) {
             var c = arrs[a][b];
             if (!seen[c.id]) { seen[c.id] = 1; out.push(c); }
           }
