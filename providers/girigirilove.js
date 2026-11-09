@@ -11,7 +11,8 @@
 // "$$$", episodes by "#", and each episode is "name$link".
 //
 // Episode links may be direct .m3u8/.mp4 files or play pages; _resolve() handles
-// both. This source only talks to girigirilove (no AniList, no Bangumi).
+// both. This source never calls AniList; third-party lookups (Bangumi, Jikan) are
+// controlled by the switches below.
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
   ? String(__SOURCE_ID) : 'girigirilove';
@@ -22,10 +23,18 @@ var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 var PAGE = 24;
 
+// Switches (edit on GitHub, then bump the version):
+//  USE_BANGUMI_SEARCH: when a title finds nothing on the site, look up its Chinese
+//    name on Bangumi and search again (lets Japanese/English/romaji titles match).
+//  LOOKUP_MAL: when a detail page opens, work out the MyAnimeList id (Bangumi ->
+//    Jikan) so Zangetsu can attach AniList/MAL metadata and sync trackers.
+var USE_BANGUMI_SEARCH = false;
+var LOOKUP_MAL = true;
+
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.1.1' };
+    type: 'anime', version: '1.2.0' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -106,13 +115,89 @@ function _siteSearch(q, page) {
     .catch(function () { return []; });
 }
 
-// Search the site's own API with the title exactly as given. Titles on this site
-// are Chinese, so Chinese keywords are what match.
+// Bangumi lookup: title in any language -> candidate Chinese/Japanese names.
+function _bgmTitles(q) {
+  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(q)
+    + '?type=2&responseGroup=small&max_results=5';
+  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/1.0 (personal use)' } })
+    .then(function (r) { return r.body || ''; })
+    .then(function (b) {
+      var j; try { j = JSON.parse(b); } catch (e) { return []; }
+      var list = (j && j.list) || [], out = [], seen = {};
+      for (var i = 0; i < list.length; i++) {
+        var names = [list[i].name_cn, list[i].name];
+        for (var k = 0; k < names.length; k++) {
+          var n = names[k] ? String(names[k]).trim() : '';
+          if (n && !seen[n]) { seen[n] = 1; out.push(n); }
+        }
+      }
+      return out;
+    })
+    .catch(function () { return []; });
+}
+
+// Drop "Season 2" / "2nd Season" / "Part 2" noise before the Bangumi lookup.
+function _plain(q) {
+  return String(q)
+    .replace(/\b(\d+(st|nd|rd|th)\s+season|season\s*\d+|part\s*\d+|cour\s*\d+)\b/gi, '')
+    .replace(/\s+/g, ' ').trim();
+}
+
+function _lookup(q) {
+  return _bgmTitles(q).then(function (t) {
+    if (t.length) return t;
+    var p = _plain(q);
+    return p && p !== q ? _bgmTitles(p) : [];
+  });
+}
+
 function search(query, page, opts) {
   var q = String(query || '').trim();
   if (!q) return Promise.resolve([]);
   var pg = page && page > 0 ? page : 1;
-  return _siteSearch(q, pg);
+
+  return _siteSearch(q, pg).then(function (direct) {
+    if (direct.length || pg > 1 || !USE_BANGUMI_SEARCH) return direct;
+
+    return _lookup(q).then(function (titles) {
+      if (!titles.length) return [];
+      var picked = titles.slice(0, 4);
+      return Promise.all(picked.map(function (t) { return _siteSearch(t, 1); }))
+        .then(function (groups) {
+          // Best match: a result whose title equals the Bangumi title it was
+          // found with; otherwise the first result of the first group.
+          var best = null, a, b;
+          for (a = 0; a < groups.length && !best; a++) {
+            for (b = 0; b < groups[a].length; b++) {
+              if (groups[a][b].title === picked[a]) { best = groups[a][b]; break; }
+            }
+          }
+          for (a = 0; a < groups.length && !best; a++) {
+            if (groups[a].length) best = groups[a][0];
+          }
+
+          var out = [], seen = {};
+          if (best) {
+            // Zangetsu auto-matches results to its own (Japanese/English/romaji)
+            // title by similarity; a Chinese title never resembles it. List the
+            // best match under the query's own title so it is picked up.
+            var top = {};
+            for (var key in best) top[key] = best[key];
+            top.altTitle = best.title;
+            top.title = q;
+            seen[best.id] = 1;
+            out.push(top);
+          }
+          for (a = 0; a < groups.length; a++) {
+            for (b = 0; b < groups[a].length; b++) {
+              var c = groups[a][b];
+              if (!seen[c.id]) { seen[c.id] = 1; out.push(c); }
+            }
+          }
+          return out;
+        });
+    });
+  });
 }
 
 // ── Detail + episodes ────────────────────────────────────────────────────────
@@ -153,7 +238,7 @@ function getDetail(url, opts) {
       }
     }
     var year = parseInt(info.vod_year, 10);
-    return {
+    var d = {
       id: id, title: info.vod_name || id, englishTitle: null,
       cover: _abs(info.vod_pic), url: id,
       description: _text(info.vod_content || info.vod_blurb),
@@ -161,7 +246,71 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
+    return _malFor(d.title, d.year).then(function (m) {
+      if (m) { d.malId = m.malId; d.englishTitle = m.english || m.romaji || null; }
+      return d;
+    });
   });
+}
+
+// ── MyAnimeList id (Chinese title -> Bangumi Japanese title -> Jikan) ────────
+var _malCache = {};
+
+function _withTimeout(p, ms) {
+  if (typeof setTimeout !== 'function') return p;
+  return new Promise(function (resolve) {
+    var done = false;
+    setTimeout(function () { if (!done) { done = true; resolve(null); } }, ms);
+    p.then(function (v) { if (!done) { done = true; resolve(v); } },
+      function () { if (!done) { done = true; resolve(null); } });
+  });
+}
+
+function _getJson(u) {
+  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/1.2 (personal use)' } })
+    .then(function (r) { return r.body || ''; })
+    .then(function (b) { try { return JSON.parse(b); } catch (e) { return null; } })
+    .catch(function () { return null; });
+}
+
+function _malLookup(cn, year) {
+  var bu = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
+    + '?type=2&responseGroup=small&max_results=5';
+  return _getJson(bu).then(function (j) {
+    var list = (j && j.list) || [], jp = null, i;
+    for (i = 0; i < list.length; i++) {
+      if (list[i].name_cn === cn && list[i].name) { jp = list[i].name; break; }
+    }
+    if (!jp && list.length && list[0].name) jp = list[0].name;
+    if (!jp) return null;
+    var ju = 'https://api.jikan.moe/v4/anime?limit=10&q=' + encodeURIComponent(jp);
+    return _getJson(ju).then(function (r) {
+      var data = (r && r.data) || [], pick = null, k;
+      // Only accept a certain match: the exact Japanese title, or a result from the
+      // same year as the site's entry. A wrong id is worse than none.
+      for (k = 0; k < data.length; k++) {
+        if (data[k].title_japanese === jp) { pick = data[k]; break; }
+      }
+      if (!pick && year) {
+        for (k = 0; k < data.length; k++) {
+          var y = data[k].year || (data[k].aired && data[k].aired.prop && data[k].aired.prop.from
+            && data[k].aired.prop.from.year);
+          if (y === year) { pick = data[k]; break; }
+        }
+      }
+      if (!pick || !pick.mal_id) return null;
+      return { malId: pick.mal_id, english: pick.title_english || null, romaji: pick.title || null };
+    });
+  });
+}
+
+function _malFor(cn, year) {
+  if (!LOOKUP_MAL || !cn) return Promise.resolve(null);
+  if (_malCache.hasOwnProperty(cn)) return Promise.resolve(_malCache[cn]);
+  return _withTimeout(_malLookup(cn, year), 5000).then(function (m) {
+    if (m) _malCache[cn] = m;
+    return m;
+  }).catch(function () { return null; });
 }
 
 function getEpisodes(url, opts) {
