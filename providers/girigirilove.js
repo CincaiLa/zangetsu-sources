@@ -11,8 +11,9 @@
 // "$$$", episodes by "#", and each episode is "name$link".
 //
 // Episode links may be direct .m3u8/.mp4 files or play pages; _resolve() handles
-// both. This source never calls AniList; third-party lookups (Bangumi, Jikan) are
-// controlled by the switches below.
+// both. This source never calls AniList. The only third-party request it makes is
+// a Bangumi lookup (search only) to turn a Japanese/English/romaji title into the
+// Chinese title this site uses.
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
   ? String(__SOURCE_ID) : 'girigirilove';
@@ -23,26 +24,10 @@ var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 var PAGE = 24;
 
-// Switches (edit on GitHub, then bump the version):
-//  USE_BANGUMI_SEARCH: when a title finds nothing on the site, look up its Chinese
-//    name on Bangumi and search again (lets Japanese/English/romaji titles match).
-//  LOOKUP_MAL: when a detail page opens, work out the MyAnimeList id (Bangumi ->
-//    Jikan) so Zangetsu can attach AniList/MAL metadata and sync trackers.
-var USE_BANGUMI_SEARCH = true;
-var LOOKUP_MAL = true;
-//  DIAG: while testing, show why metadata is missing in the first episode's title.
-//    Set to false once episodes show the English titles.
-var DIAG = true;
-//  TITLE_LANG: 'ja' shows each title as its Japanese original (looked up on Bangumi)
-//    so Zangetsu can find metadata for it, like it does for AnimeCube's English
-//    titles; 'zh' keeps the Chinese titles from the site. Titles Bangumi cannot
-//    match exactly stay Chinese either way.
-var TITLE_LANG = 'ja';
-
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.4.0' };
+    type: 'anime', version: '1.4.1' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -98,13 +83,12 @@ function getHome(opts) {
   // Small request on purpose: this API returns every field (full synopsis too)
   // for each row, and the app gives a source only a few seconds to answer.
   return _json(API + '/get_list?offset=0&limit=12').then(function (j) {
-    return _withJa(_rows(j).map(_card)).then(function (cards) {
-      var rows = [
-        { title: '最近更新', items: cards.slice(0, 6) },
-        { title: '更多番剧', items: cards.slice(6) },
-      ];
-      return rows.filter(function (r) { return r.items.length; });
-    });
+    var cards = _rows(j).map(_card);
+    var rows = [
+      { title: '最近更新', items: cards.slice(0, 6) },
+      { title: '更多番剧', items: cards.slice(6) },
+    ];
+    return rows.filter(function (r) { return r.items.length; });
   }).catch(function () { return []; });
 }
 
@@ -120,7 +104,7 @@ function popular(opts) {
 function _siteSearch(q, page) {
   var url = API + '/get_list?vod_name=' + encodeURIComponent(q)
     + '&offset=' + ((page - 1) * PAGE) + '&limit=' + PAGE;
-  return _json(url).then(function (j) { return _withJa(_rows(j).map(_card)); })
+  return _json(url).then(function (j) { return _rows(j).map(_card); })
     .catch(function () { return []; });
 }
 
@@ -166,7 +150,7 @@ function search(query, page, opts) {
   var pg = page && page > 0 ? page : 1;
 
   return _siteSearch(q, pg).then(function (direct) {
-    if (direct.length || pg > 1 || !USE_BANGUMI_SEARCH) return direct;
+    if (direct.length || pg > 1) return direct;
 
     return _lookup(q).then(function (titles) {
       if (!titles.length) return [];
@@ -247,7 +231,7 @@ function getDetail(url, opts) {
       }
     }
     var year = parseInt(info.vod_year, 10);
-    var d = {
+    return {
       id: id, title: info.vod_name || id, englishTitle: null,
       cover: _abs(info.vod_pic), url: id,
       description: _text(info.vod_content || info.vod_blurb),
@@ -255,162 +239,113 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
-    var zh = d.title;
-    return _jaTitle(zh).then(function (jt) {
-      return _metaFor(zh, d.year).then(function (m) {
-        if (m) {
-          d.malId = m.malId;
-          d.anilistId = m.anilistId || null;
-          d.englishTitle = m.english || m.romaji || null;
-        }
-        var hit = _applyEpisodes(d.episodes, m);
-        if (DIAG && d.episodes.length && !hit) {
-          d.episodes[0].title = m ? '诊断: MAL ' + m.malId + ' 没有AniZip剧集' : '诊断: 没查到MAL编号';
-        }
-        if (jt && jt !== zh) { d.zhTitle = zh; d.title = jt; }
-        return d;
-      });
-    });
   });
 }
 
-// ── MyAnimeList id (Chinese title -> Bangumi Japanese title -> Jikan) ────────
-var _malCache = {};
-
-function _withTimeout(p, ms) {
-  if (typeof setTimeout !== 'function') return p;
-  return new Promise(function (resolve) {
-    var done = false;
-    setTimeout(function () { if (!done) { done = true; resolve(null); } }, ms);
-    p.then(function (v) { if (!done) { done = true; resolve(v); } },
-      function () { if (!done) { done = true; resolve(null); } });
-  });
+function getEpisodes(url, opts) {
+  return getDetail(url, opts).then(function (d) { return d.episodes; });
 }
 
-function _getJson(u) {
-  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/1.2 (personal use)' } })
-    .then(function (r) { return r.body || ''; })
-    .then(function (b) { try { return JSON.parse(b); } catch (e) { return null; } })
-    .catch(function () { return null; });
-}
+// ── Streams ──────────────────────────────────────────────────────────────────
+function getVideoSources(episodeUrl) {
+  var raw = String(episodeUrl).replace('girigiri://', '');
+  var cut = raw.indexOf('|');
+  if (cut < 0) return Promise.reject(new Error('girigiriLove: bad episode url'));
+  var id = raw.slice(0, cut);
+  var idx = parseInt(raw.slice(cut + 1), 10);
 
-function _malLookup(cn, year) {
-  var bu = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
-    + '?type=2&responseGroup=small&max_results=5';
-  return _getJson(bu).then(function (j) {
-    var list = (j && j.list) || [], jp = null, i;
-    for (i = 0; i < list.length; i++) {
-      if (list[i].name_cn === cn && list[i].name) { jp = list[i].name; break; }
+  return _info(id).then(function (info) {
+    var roads = _roads(info);
+    var jobs = [];
+    for (var i = 0; i < roads.length; i++) {
+      var ep = roads[i].eps[idx];
+      if (ep && ep.url) jobs.push(_resolve(ep.url, 0));
     }
-    if (!jp && list.length && list[0].name) jp = list[0].name;
-    if (!jp) return null;
-    var ju = 'https://api.jikan.moe/v4/anime?limit=10&q=' + encodeURIComponent(jp);
-    return _getJson(ju).then(function (r) {
-      var data = (r && r.data) || [], pick = null, k;
-      // Only accept a certain match: the exact Japanese title, or a result from the
-      // same year as the site's entry. A wrong id is worse than none.
-      for (k = 0; k < data.length; k++) {
-        if (data[k].title_japanese === jp) { pick = data[k]; break; }
-      }
-      if (!pick && year) {
-        for (k = 0; k < data.length; k++) {
-          var y = data[k].year || (data[k].aired && data[k].aired.prop && data[k].aired.prop.from
-            && data[k].aired.prop.from.year);
-          if (y === year) { pick = data[k]; break; }
+    return Promise.all(jobs).then(function (groups) {
+      var out = [], seen = {};
+      for (var a = 0; a < groups.length; a++) {
+        for (var b = 0; b < groups[a].length; b++) {
+          var s = groups[a][b];
+          if (!seen[s.url]) { seen[s.url] = 1; out.push(s); }
         }
       }
-      if (!pick || !pick.mal_id) return null;
-      return { malId: pick.mal_id, english: pick.title_english || null, romaji: pick.title || null };
+      if (!out.length) throw new Error('girigiriLove: no playable sources');
+      return out;
     });
   });
 }
 
-// Episode titles / dates / thumbnails from AniZip (keyed by MAL id).
-function _metaLookup(cn, year) {
-  return _malLookup(cn, year).then(function (m) {
-    if (!m) return null;
-    return _getJson('https://api.ani.zip/mappings?mal_id=' + encodeURIComponent(m.malId)).then(function (z) {
-      m.anilistId = (z && z.mappings && z.mappings.anilist_id) || null;
-      m.eps = (z && z.episodes) || {};
-      return m;
-    });
-  });
+function _isMedia(u) {
+  return /\.(m3u8|mp4)(\?|#|$)/i.test(String(u));
 }
 
-function _metaFor(cn, year) {
-  if (!LOOKUP_MAL || !cn) return Promise.resolve(null);
-  if (_malCache.hasOwnProperty(cn)) return Promise.resolve(_malCache[cn]);
-  return _withTimeout(_metaLookup(cn, year), 8000).then(function (m) {
-    if (m) _malCache[cn] = m;
-    return m;
-  }).catch(function () { return null; });
+function _source(u) {
+  return { url: u, quality: 'auto', container: /\.m3u8/i.test(u) ? 'hls' : 'mp4',
+    headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
+    kind: 'sub', audioLang: 'ja', subtitles: [] };
 }
 
-function _pickTitle(t) {
-  if (!t) return null;
-  if (typeof t === 'string') return t;
-  return t.en || t['x-jat'] || t.ja || t.zh || null;
+// Direct media links are used as-is; anything else is a page to search for a
+// stream (at most two hops).
+function _resolve(raw, depth) {
+  var u = _abs(raw);
+  if (!u) return Promise.resolve([]);
+  if (_isMedia(u)) return Promise.resolve([_source(u)]);
+  if (depth > 1) return Promise.resolve([]);
+
+  return _get(u, SITE + '/').then(function (html) {
+    html = String(html || '');
+    var viaVar = _playerUrl(html);
+    if (viaVar) {
+      var next = _abs(viaVar);
+      if (next && _isMedia(next)) return [_source(next)];
+      if (next) return _resolve(next, depth + 1);
+    }
+    var m = html.match(/https?:\\?\/\\?\/[^"'\s<>]+?\.(?:m3u8|mp4)[^"'\s<>]*/);
+    if (m) {
+      var link = _abs(m[0]);
+      if (link) return [_source(link)];
+    }
+    return [];
+  }).catch(function () { return []; });
 }
 
-// Copy AniZip's per-episode data onto our episodes by episode number.
-function _applyEpisodes(episodes, m) {
-  if (!m || !m.eps) return 0;
-  var hit = 0;
-  for (var i = 0; i < episodes.length; i++) {
-    var z = m.eps[String(episodes[i].number)];
-    if (!z) continue;
-    var title = _pickTitle(z.title);
-    if (!title) continue;
-    var e = episodes[i];
-    e.title = title;
-    var img = z.image || null, text = z.overview || z.summary || null;
-    var air = z.airdate || z.airDate || z.airDateUtc || null;
-    var len = z.runtime || z.length || null;
-    if (img) { e.thumbnail = img; e.image = img; }
-    if (text) { e.description = text; e.overview = text; }
-    if (air) { e.airDate = air; }
-    if (len) { e.duration = len; }
-    if (z.rating) { e.rating = parseFloat(z.rating) || null; }
-    hit++;
+// MacCMS play pages define `var player_xxxx = {..., "url": "...", "encrypt": 0|1|2}`.
+function _playerUrl(html) {
+  var m = html.match(/var\s+player_\w+\s*=\s*(\{[\s\S]*?\})\s*<\/script>/);
+  if (!m) return null;
+  var o;
+  try { o = JSON.parse(m[1]); } catch (e) { return null; }
+  if (!o || !o.url) return null;
+  return _decode(o.url, o.encrypt);
+}
+
+var _ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function _base64(s) {
+  s = String(s).replace(/[^A-Za-z0-9+\/]/g, '');
+  var out = '', bits = 0, val = 0;
+  for (var i = 0; i < s.length; i++) {
+    val = (val << 6) | _ALPHABET.indexOf(s.charAt(i));
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode((val >> bits) & 255);
+      val &= (1 << bits) - 1;
+    }
   }
-  return hit;
+  return out;
 }
 
-// ── Japanese titles (so Zangetsu can look the show up) ───────────────────────
-var _jaCache = {};
-
-function _norm(s) {
-  return String(s || '').replace(/[\s·・:：!！?？,，。、~～\-—_]/g, '').toLowerCase();
+function _unescape(s) {
+  return typeof unescape === 'function' ? unescape(s) : decodeURIComponent(s);
 }
 
-// Chinese site title -> Japanese original, only on an exact (normalized) name_cn match.
-function _jaTitle(cn) {
-  if (TITLE_LANG !== 'ja' || !cn) return Promise.resolve(cn);
-  if (_jaCache.hasOwnProperty(cn)) return Promise.resolve(_jaCache[cn]);
-  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
-    + '?type=2&responseGroup=small&max_results=5';
-  return _getJson(u).then(function (j) {
-    var list = (j && j.list) || [], want = _norm(cn), jp = null;
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].name && _norm(list[i].name_cn) === want) { jp = list[i].name; break; }
-    }
-    if (j) _jaCache[cn] = jp || cn;
-    return jp || cn;
-  });
-}
-
-function _withJa(cards) {
-  if (TITLE_LANG !== 'ja' || !cards.length) return Promise.resolve(cards);
-  return _withTimeout(Promise.all(cards.map(function (c) { return _jaTitle(c.title); })), 6000)
-    .then(function (titles) {
-      if (!titles) return cards;
-      return cards.map(function (c, i) {
-        if (!titles[i] || titles[i] === c.title) return c;
-        var o = {};
-        for (var k in c) o[k] = c[k];
-        o.zhTitle = c.title;
-        o.title = titles[i];
-        return o;
-      });
-    });
+function _decode(url, encrypt) {
+  var e = parseInt(encrypt, 10) || 0;
+  try {
+    if (e === 1) return _unescape(String(url));
+    if (e === 2) return _unescape(_base64(url));
+  } catch (err) { /* use the raw value */ }
+  return String(url);
 }
