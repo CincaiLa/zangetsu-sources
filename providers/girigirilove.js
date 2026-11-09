@@ -28,16 +28,21 @@ var PAGE = 24;
 //    name on Bangumi and search again (lets Japanese/English/romaji titles match).
 //  LOOKUP_MAL: when a detail page opens, work out the MyAnimeList id (Bangumi ->
 //    Jikan) so Zangetsu can attach AniList/MAL metadata and sync trackers.
-var USE_BANGUMI_SEARCH = false;
+var USE_BANGUMI_SEARCH = true;
 var LOOKUP_MAL = true;
 //  DIAG: while testing, show why metadata is missing in the first episode's title.
 //    Set to false once episodes show the English titles.
 var DIAG = true;
+//  TITLE_LANG: 'ja' shows each title as its Japanese original (looked up on Bangumi)
+//    so Zangetsu can find metadata for it, like it does for AnimeCube's English
+//    titles; 'zh' keeps the Chinese titles from the site. Titles Bangumi cannot
+//    match exactly stay Chinese either way.
+var TITLE_LANG = 'ja';
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.3.0' };
+    type: 'anime', version: '1.4.0' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -93,12 +98,13 @@ function getHome(opts) {
   // Small request on purpose: this API returns every field (full synopsis too)
   // for each row, and the app gives a source only a few seconds to answer.
   return _json(API + '/get_list?offset=0&limit=12').then(function (j) {
-    var cards = _rows(j).map(_card);
-    var rows = [
-      { title: '最近更新', items: cards.slice(0, 6) },
-      { title: '更多番剧', items: cards.slice(6) },
-    ];
-    return rows.filter(function (r) { return r.items.length; });
+    return _withJa(_rows(j).map(_card)).then(function (cards) {
+      var rows = [
+        { title: '最近更新', items: cards.slice(0, 6) },
+        { title: '更多番剧', items: cards.slice(6) },
+      ];
+      return rows.filter(function (r) { return r.items.length; });
+    });
   }).catch(function () { return []; });
 }
 
@@ -114,7 +120,7 @@ function popular(opts) {
 function _siteSearch(q, page) {
   var url = API + '/get_list?vod_name=' + encodeURIComponent(q)
     + '&offset=' + ((page - 1) * PAGE) + '&limit=' + PAGE;
-  return _json(url).then(function (j) { return _rows(j).map(_card); })
+  return _json(url).then(function (j) { return _withJa(_rows(j).map(_card)); })
     .catch(function () { return []; });
 }
 
@@ -249,17 +255,21 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
-    return _metaFor(d.title, d.year).then(function (m) {
-      if (m) {
-        d.malId = m.malId;
-        d.anilistId = m.anilistId || null;
-        d.englishTitle = m.english || m.romaji || null;
-      }
-      var hit = _applyEpisodes(d.episodes, m);
-      if (DIAG && d.episodes.length && !hit) {
-        d.episodes[0].title = m ? '诊断: MAL ' + m.malId + ' 没有AniZip剧集' : '诊断: 没查到MAL编号';
-      }
-      return d;
+    var zh = d.title;
+    return _jaTitle(zh).then(function (jt) {
+      return _metaFor(zh, d.year).then(function (m) {
+        if (m) {
+          d.malId = m.malId;
+          d.anilistId = m.anilistId || null;
+          d.englishTitle = m.english || m.romaji || null;
+        }
+        var hit = _applyEpisodes(d.episodes, m);
+        if (DIAG && d.episodes.length && !hit) {
+          d.episodes[0].title = m ? '诊断: MAL ' + m.malId + ' 没有AniZip剧集' : '诊断: 没查到MAL编号';
+        }
+        if (jt && jt !== zh) { d.zhTitle = zh; d.title = jt; }
+        return d;
+      });
     });
   });
 }
@@ -364,4 +374,43 @@ function _applyEpisodes(episodes, m) {
     hit++;
   }
   return hit;
+}
+
+// ── Japanese titles (so Zangetsu can look the show up) ───────────────────────
+var _jaCache = {};
+
+function _norm(s) {
+  return String(s || '').replace(/[\s·・:：!！?？,，。、~～\-—_]/g, '').toLowerCase();
+}
+
+// Chinese site title -> Japanese original, only on an exact (normalized) name_cn match.
+function _jaTitle(cn) {
+  if (TITLE_LANG !== 'ja' || !cn) return Promise.resolve(cn);
+  if (_jaCache.hasOwnProperty(cn)) return Promise.resolve(_jaCache[cn]);
+  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
+    + '?type=2&responseGroup=small&max_results=5';
+  return _getJson(u).then(function (j) {
+    var list = (j && j.list) || [], want = _norm(cn), jp = null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].name && _norm(list[i].name_cn) === want) { jp = list[i].name; break; }
+    }
+    if (j) _jaCache[cn] = jp || cn;
+    return jp || cn;
+  });
+}
+
+function _withJa(cards) {
+  if (TITLE_LANG !== 'ja' || !cards.length) return Promise.resolve(cards);
+  return _withTimeout(Promise.all(cards.map(function (c) { return _jaTitle(c.title); })), 6000)
+    .then(function (titles) {
+      if (!titles) return cards;
+      return cards.map(function (c, i) {
+        if (!titles[i] || titles[i] === c.title) return c;
+        var o = {};
+        for (var k in c) o[k] = c[k];
+        o.zhTitle = c.title;
+        o.title = titles[i];
+        return o;
+      });
+    });
 }
