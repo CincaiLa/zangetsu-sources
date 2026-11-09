@@ -11,9 +11,7 @@
 // "$$$", episodes by "#", and each episode is "name$link".
 //
 // Episode links may be direct .m3u8/.mp4 files or play pages; _resolve() handles
-// both. This source never calls AniList. The only third-party request it makes is
-// a Bangumi lookup (search only) to turn a Japanese/English/romaji title into the
-// Chinese title this site uses.
+// both. This source only talks to girigirilove (no AniList, no Bangumi).
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
   ? String(__SOURCE_ID) : 'girigirilove';
@@ -27,7 +25,7 @@ var PAGE = 24;
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.5.0' };
+    type: 'anime', version: '1.5.1' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -79,7 +77,7 @@ function _card(r) {
 
 // ── Listings ─────────────────────────────────────────────────────────────────
 // Two short rows only: the app uses row[0] as the hero carousel.
-function _home(opts) {
+function getHome(opts) {
   // Small request on purpose: this API returns every field (full synopsis too)
   // for each row, and the app gives a source only a few seconds to answer.
   return _json(API + '/get_list?offset=0&limit=12').then(function (j) {
@@ -93,7 +91,7 @@ function _home(opts) {
 }
 
 function popular(opts) {
-  return _home(opts).then(function (rows) {
+  return getHome(opts).then(function (rows) {
     var out = [];
     for (var i = 0; i < rows.length; i++) out = out.concat(rows[i].items);
     return out;
@@ -108,89 +106,13 @@ function _siteSearch(q, page) {
     .catch(function () { return []; });
 }
 
-// Bangumi lookup: title in any language -> candidate Chinese/Japanese names.
-function _bgmTitles(q) {
-  var u = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(q)
-    + '?type=2&responseGroup=small&max_results=5';
-  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/1.0 (personal use)' } })
-    .then(function (r) { return r.body || ''; })
-    .then(function (b) {
-      var j; try { j = JSON.parse(b); } catch (e) { return []; }
-      var list = (j && j.list) || [], out = [], seen = {};
-      for (var i = 0; i < list.length; i++) {
-        var names = [list[i].name_cn, list[i].name];
-        for (var k = 0; k < names.length; k++) {
-          var n = names[k] ? String(names[k]).trim() : '';
-          if (n && !seen[n]) { seen[n] = 1; out.push(n); }
-        }
-      }
-      return out;
-    })
-    .catch(function () { return []; });
-}
-
-// Drop "Season 2" / "2nd Season" / "Part 2" noise before the Bangumi lookup.
-function _plain(q) {
-  return String(q)
-    .replace(/\b(\d+(st|nd|rd|th)\s+season|season\s*\d+|part\s*\d+|cour\s*\d+)\b/gi, '')
-    .replace(/\s+/g, ' ').trim();
-}
-
-function _lookup(q) {
-  return _bgmTitles(q).then(function (t) {
-    if (t.length) return t;
-    var p = _plain(q);
-    return p && p !== q ? _bgmTitles(p) : [];
-  });
-}
-
-function _search(query, page, opts) {
+// Search the site's own API with the title exactly as given. Titles on this site
+// are Chinese, so Chinese keywords are what match.
+function search(query, page, opts) {
   var q = String(query || '').trim();
   if (!q) return Promise.resolve([]);
   var pg = page && page > 0 ? page : 1;
-
-  return _siteSearch(q, pg).then(function (direct) {
-    if (direct.length || pg > 1) return direct;
-
-    return _lookup(q).then(function (titles) {
-      if (!titles.length) return [];
-      var picked = titles.slice(0, 4);
-      return Promise.all(picked.map(function (t) { return _siteSearch(t, 1); }))
-        .then(function (groups) {
-          // Best match: a result whose title equals the Bangumi title it was
-          // found with; otherwise the first result of the first group.
-          var best = null, a, b;
-          for (a = 0; a < groups.length && !best; a++) {
-            for (b = 0; b < groups[a].length; b++) {
-              if (groups[a][b].title === picked[a]) { best = groups[a][b]; break; }
-            }
-          }
-          for (a = 0; a < groups.length && !best; a++) {
-            if (groups[a].length) best = groups[a][0];
-          }
-
-          var out = [], seen = {};
-          if (best) {
-            // Zangetsu auto-matches results to its own (Japanese/English/romaji)
-            // title by similarity; a Chinese title never resembles it. List the
-            // best match under the query's own title so it is picked up.
-            var top = {};
-            for (var key in best) top[key] = best[key];
-            top.altTitle = best.title;
-            top.title = q;
-            seen[best.id] = 1;
-            out.push(top);
-          }
-          for (a = 0; a < groups.length; a++) {
-            for (b = 0; b < groups[a].length; b++) {
-              var c = groups[a][b];
-              if (!seen[c.id]) { seen[c.id] = 1; out.push(c); }
-            }
-          }
-          return out;
-        });
-    });
-  });
+  return _siteSearch(q, pg);
 }
 
 // ── Detail + episodes ────────────────────────────────────────────────────────
@@ -215,7 +137,7 @@ function _info(id) {
   });
 }
 
-function _fetchDetail(url, opts) {
+function getDetail(url, opts) {
   var id = String(url);
   return _info(id).then(function (info) {
     var roads = _roads(info);
@@ -239,122 +161,6 @@ function _fetchDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
-  });
-}
-
-// ── Speed and metadata layer ─────────────────────────────────────────────────
-// Zangetsu gives a source a short time budget on the playback path (getDetail +
-// getEpisodes + getVideoSources), and a source that blows it is dropped and
-// benched for a while, which looks exactly like a dead source. So: the detail is
-// cached for five minutes (getEpisodes asks for it again when you press play),
-// and nothing third-party is ever waited on.
-var LOOKUP_MAL = true;   // find the MyAnimeList id in the background (Bangumi -> Jikan)
-var DIAG = true;         // show the lookups as a last row on this source's home page
-
-var _detailCache = {};
-var _DETAIL_TTL = 300000;
-var _malCache = {};   // Chinese title -> { malId, english, romaji }
-var _malMiss = {};    // Chinese title -> time of the last failed lookup
-var _malBusy = {};
-
-function _getJson(u) {
-  return fetch(u, { headers: { 'User-Agent': 'zangetsu-sources/1.5 (personal use)' }, timeoutMs: 6000 })
-    .then(function (r) { return r.body || ''; })
-    .then(function (b) { try { return JSON.parse(b); } catch (e) { return null; } })
-    .catch(function () { return null; });
-}
-
-function _malLookup(cn, year) {
-  var bu = 'https://api.bgm.tv/search/subject/' + encodeURIComponent(cn)
-    + '?type=2&responseGroup=small&max_results=5';
-  return _getJson(bu).then(function (j) {
-    var list = (j && j.list) || [], jp = null, i;
-    for (i = 0; i < list.length; i++) {
-      if (list[i].name_cn === cn && list[i].name) { jp = list[i].name; break; }
-    }
-    if (!jp && list.length && list[0].name) jp = list[0].name;
-    if (!jp) return null;
-    var ju = 'https://api.jikan.moe/v4/anime?limit=10&q=' + encodeURIComponent(jp);
-    return _getJson(ju).then(function (r) {
-      var data = (r && r.data) || [], pick = null, k;
-      // Only a certain match: the exact Japanese title, or the same year as the
-      // site's entry. A wrong id is worse than none.
-      for (k = 0; k < data.length; k++) {
-        if (data[k].title_japanese === jp) { pick = data[k]; break; }
-      }
-      if (!pick && year) {
-        for (k = 0; k < data.length; k++) {
-          var y = data[k].year || (data[k].aired && data[k].aired.prop && data[k].aired.prop.from
-            && data[k].aired.prop.from.year);
-          if (y === year) { pick = data[k]; break; }
-        }
-      }
-      if (!pick || !pick.mal_id) return null;
-      return { malId: pick.mal_id, english: pick.title_english || null, romaji: pick.title || null };
-    });
-  });
-}
-
-function _attachMal(d) {
-  var m = _malCache[d.title];
-  if (m) { d.malId = m.malId; d.englishTitle = m.english || m.romaji || null; }
-}
-
-// Start a lookup without waiting for it; when it lands it is written onto any
-// detail we already cached, so the next time Zangetsu asks it has the id.
-function _kickMal(cn, year) {
-  if (!LOOKUP_MAL || !cn || _malCache[cn] || _malBusy[cn]) return;
-  if (_malMiss[cn] && Date.now() - _malMiss[cn] < 300000) return;
-  _malBusy[cn] = true;
-  _malLookup(cn, year).then(function (m) {
-    if (m) {
-      _malCache[cn] = m;
-      for (var id in _detailCache) {
-        if (_detailCache[id].value.title === cn) _attachMal(_detailCache[id].value);
-      }
-    } else {
-      _malMiss[cn] = Date.now();
-    }
-  }).catch(function () { _malMiss[cn] = Date.now(); })
-    .then(function () { _malBusy[cn] = false; });
-}
-
-function getDetail(url, opts) {
-  var id = String(url);
-  var hit = _detailCache[id];
-  if (hit && (Date.now() - hit.at) < _DETAIL_TTL) {
-    _attachMal(hit.value);
-    return Promise.resolve(hit.value);
-  }
-  return _fetchDetail(id, opts).then(function (d) {
-    _attachMal(d);
-    if (d.episodes && d.episodes.length) _detailCache[id] = { at: Date.now(), value: d };
-    if (!d.malId) _kickMal(d.title, d.year);
-    return d;
-  });
-}
-
-function search(query, page, opts) {
-  return _search(query, page, opts).then(function (res) {
-    for (var i = 0; i < res.length && i < 3; i++) {
-      _kickMal(res[i].altTitle || res[i].title, res[i].year);
-    }
-    return res;
-  });
-}
-
-function _dbg(text) {
-  return { id: 'dbg-' + text, title: text, cover: null, url: 'dbg', type: 'anime', sourceId: SOURCE_ID };
-}
-
-function getHome(opts) {
-  return _home(opts).then(function (rows) {
-    if (!DIAG) return rows;
-    var items = [], k;
-    for (k in _malCache) items.push(_dbg('MAL ' + _malCache[k].malId + ' ← ' + k));
-    for (k in _malMiss) items.push(_dbg('没查到 ← ' + k));
-    if (!items.length) items.push(_dbg('还没有查询记录'));
-    return (rows || []).concat([{ title: 'MAL查询记录', items: items.slice(0, 12) }]);
   });
 }
 
