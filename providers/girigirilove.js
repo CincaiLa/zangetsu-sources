@@ -34,7 +34,7 @@ var LOOKUP_MAL = true;
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.2.0' };
+    type: 'anime', version: '1.2.1' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ function getDetail(url, opts) {
       for (var k = 0; k < main.eps.length; k++) {
         var n = k + 1;
         episodes.push({ id: id + '-' + n, number: n,
-          title: main.eps[k].name || ('Episode ' + n),
+          title: 'Episode ' + n,
           url: 'girigiri://' + id + '|' + k });
       }
     }
@@ -248,6 +248,8 @@ function getDetail(url, opts) {
     };
     return _malFor(d.title, d.year).then(function (m) {
       if (m) { d.malId = m.malId; d.englishTitle = m.english || m.romaji || null; }
+      // DIAGNOSTIC: show the lookup result in the first episode's title.
+      if (d.episodes.length) d.episodes[0].title = 'Episode 1 [mal ' + (m ? m.malId : '无') + ']';
       return d;
     });
   });
