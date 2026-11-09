@@ -30,11 +30,14 @@ var PAGE = 24;
 //    Jikan) so Zangetsu can attach AniList/MAL metadata and sync trackers.
 var USE_BANGUMI_SEARCH = false;
 var LOOKUP_MAL = true;
+//  DIAG: while testing, show why metadata is missing in the first episode's title.
+//    Set to false once episodes show the English titles.
+var DIAG = true;
 
 function getInfo() {
   return { name: 'girigiriLove', lang: 'zh', baseUrl: SITE,
     logo: 'https://raw.githubusercontent.com/CincaiLa/zangetsu-sources/main/icons/girigirilove.png',
-    type: 'anime', version: '1.2.1' };
+    type: 'anime', version: '1.3.0' };
 }
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -233,7 +236,7 @@ function getDetail(url, opts) {
       for (var k = 0; k < main.eps.length; k++) {
         var n = k + 1;
         episodes.push({ id: id + '-' + n, number: n,
-          title: 'Episode ' + n,
+          title: main.eps[k].name || ('Episode ' + n),
           url: 'girigiri://' + id + '|' + k });
       }
     }
@@ -246,10 +249,16 @@ function getDetail(url, opts) {
       sourceId: SOURCE_ID, year: year || null, malId: null,
       episodes: episodes, subCount: episodes.length, dubCount: 0,
     };
-    return _malFor(d.title, d.year).then(function (m) {
-      if (m) { d.malId = m.malId; d.englishTitle = m.english || m.romaji || null; }
-      // DIAGNOSTIC: show the lookup result in the first episode's title.
-      if (d.episodes.length) d.episodes[0].title = 'Episode 1 [mal ' + (m ? m.malId : '无') + ']';
+    return _metaFor(d.title, d.year).then(function (m) {
+      if (m) {
+        d.malId = m.malId;
+        d.anilistId = m.anilistId || null;
+        d.englishTitle = m.english || m.romaji || null;
+      }
+      var hit = _applyEpisodes(d.episodes, m);
+      if (DIAG && d.episodes.length && !hit) {
+        d.episodes[0].title = m ? '诊断: MAL ' + m.malId + ' 没有AniZip剧集' : '诊断: 没查到MAL编号';
+      }
       return d;
     });
   });
@@ -306,119 +315,53 @@ function _malLookup(cn, year) {
   });
 }
 
-function _malFor(cn, year) {
+// Episode titles / dates / thumbnails from AniZip (keyed by MAL id).
+function _metaLookup(cn, year) {
+  return _malLookup(cn, year).then(function (m) {
+    if (!m) return null;
+    return _getJson('https://api.ani.zip/mappings?mal_id=' + encodeURIComponent(m.malId)).then(function (z) {
+      m.anilistId = (z && z.mappings && z.mappings.anilist_id) || null;
+      m.eps = (z && z.episodes) || {};
+      return m;
+    });
+  });
+}
+
+function _metaFor(cn, year) {
   if (!LOOKUP_MAL || !cn) return Promise.resolve(null);
   if (_malCache.hasOwnProperty(cn)) return Promise.resolve(_malCache[cn]);
-  return _withTimeout(_malLookup(cn, year), 5000).then(function (m) {
+  return _withTimeout(_metaLookup(cn, year), 8000).then(function (m) {
     if (m) _malCache[cn] = m;
     return m;
   }).catch(function () { return null; });
 }
 
-function getEpisodes(url, opts) {
-  return getDetail(url, opts).then(function (d) { return d.episodes; });
+function _pickTitle(t) {
+  if (!t) return null;
+  if (typeof t === 'string') return t;
+  return t.en || t['x-jat'] || t.ja || t.zh || null;
 }
 
-// ── Streams ──────────────────────────────────────────────────────────────────
-function getVideoSources(episodeUrl) {
-  var raw = String(episodeUrl).replace('girigiri://', '');
-  var cut = raw.indexOf('|');
-  if (cut < 0) return Promise.reject(new Error('girigiriLove: bad episode url'));
-  var id = raw.slice(0, cut);
-  var idx = parseInt(raw.slice(cut + 1), 10);
-
-  return _info(id).then(function (info) {
-    var roads = _roads(info);
-    var jobs = [];
-    for (var i = 0; i < roads.length; i++) {
-      var ep = roads[i].eps[idx];
-      if (ep && ep.url) jobs.push(_resolve(ep.url, 0));
-    }
-    return Promise.all(jobs).then(function (groups) {
-      var out = [], seen = {};
-      for (var a = 0; a < groups.length; a++) {
-        for (var b = 0; b < groups[a].length; b++) {
-          var s = groups[a][b];
-          if (!seen[s.url]) { seen[s.url] = 1; out.push(s); }
-        }
-      }
-      if (!out.length) throw new Error('girigiriLove: no playable sources');
-      return out;
-    });
-  });
-}
-
-function _isMedia(u) {
-  return /\.(m3u8|mp4)(\?|#|$)/i.test(String(u));
-}
-
-function _source(u) {
-  return { url: u, quality: 'auto', container: /\.m3u8/i.test(u) ? 'hls' : 'mp4',
-    headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
-    kind: 'sub', audioLang: 'ja', subtitles: [] };
-}
-
-// Direct media links are used as-is; anything else is a page to search for a
-// stream (at most two hops).
-function _resolve(raw, depth) {
-  var u = _abs(raw);
-  if (!u) return Promise.resolve([]);
-  if (_isMedia(u)) return Promise.resolve([_source(u)]);
-  if (depth > 1) return Promise.resolve([]);
-
-  return _get(u, SITE + '/').then(function (html) {
-    html = String(html || '');
-    var viaVar = _playerUrl(html);
-    if (viaVar) {
-      var next = _abs(viaVar);
-      if (next && _isMedia(next)) return [_source(next)];
-      if (next) return _resolve(next, depth + 1);
-    }
-    var m = html.match(/https?:\\?\/\\?\/[^"'\s<>]+?\.(?:m3u8|mp4)[^"'\s<>]*/);
-    if (m) {
-      var link = _abs(m[0]);
-      if (link) return [_source(link)];
-    }
-    return [];
-  }).catch(function () { return []; });
-}
-
-// MacCMS play pages define `var player_xxxx = {..., "url": "...", "encrypt": 0|1|2}`.
-function _playerUrl(html) {
-  var m = html.match(/var\s+player_\w+\s*=\s*(\{[\s\S]*?\})\s*<\/script>/);
-  if (!m) return null;
-  var o;
-  try { o = JSON.parse(m[1]); } catch (e) { return null; }
-  if (!o || !o.url) return null;
-  return _decode(o.url, o.encrypt);
-}
-
-var _ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-function _base64(s) {
-  s = String(s).replace(/[^A-Za-z0-9+\/]/g, '');
-  var out = '', bits = 0, val = 0;
-  for (var i = 0; i < s.length; i++) {
-    val = (val << 6) | _ALPHABET.indexOf(s.charAt(i));
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out += String.fromCharCode((val >> bits) & 255);
-      val &= (1 << bits) - 1;
-    }
+// Copy AniZip's per-episode data onto our episodes by episode number.
+function _applyEpisodes(episodes, m) {
+  if (!m || !m.eps) return 0;
+  var hit = 0;
+  for (var i = 0; i < episodes.length; i++) {
+    var z = m.eps[String(episodes[i].number)];
+    if (!z) continue;
+    var title = _pickTitle(z.title);
+    if (!title) continue;
+    var e = episodes[i];
+    e.title = title;
+    var img = z.image || null, text = z.overview || z.summary || null;
+    var air = z.airdate || z.airDate || z.airDateUtc || null;
+    var len = z.runtime || z.length || null;
+    if (img) { e.thumbnail = img; e.image = img; }
+    if (text) { e.description = text; e.overview = text; }
+    if (air) { e.airDate = air; }
+    if (len) { e.duration = len; }
+    if (z.rating) { e.rating = parseFloat(z.rating) || null; }
+    hit++;
   }
-  return out;
-}
-
-function _unescape(s) {
-  return typeof unescape === 'function' ? unescape(s) : decodeURIComponent(s);
-}
-
-function _decode(url, encrypt) {
-  var e = parseInt(encrypt, 10) || 0;
-  try {
-    if (e === 1) return _unescape(String(url));
-    if (e === 2) return _unescape(_base64(url));
-  } catch (err) { /* use the raw value */ }
-  return String(url);
+  return hit;
 }
