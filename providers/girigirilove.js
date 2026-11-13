@@ -1,26 +1,47 @@
 /**
- * Zangetsu Provider: GiriGiriLove
+ * Zangetsu Provider: GiriGiriLove (Full Compatible Version)
  * Base: https://m3u8.girigirilove.com/api.php/Vod
  */
 
 const BASE_URL = "https://m3u8.girigirilove.com/api.php/Vod";
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Referer": "https://ani.girigirilove.com"
+  "Referer": "https://ani.girigirilove.com/"
 };
 
 /**
- * 通用列表获取函数（支持热门、最新、搜索）
+ * 辅助函数：安全提取 vod_id（无论传入的是字符串、数字还是对象）
+ */
+function extractVodId(input) {
+  if (!input) return "";
+  if (typeof input === "object") {
+    return String(input.id || input.vod_id || input.url || input.link || "");
+  }
+  return String(input);
+}
+
+/**
+ * 辅助函数：安全提取播放直链
+ */
+function extractStreamUrl(input) {
+  if (!input) return "";
+  if (typeof input === "object") {
+    return String(input.url || input.streamUrl || input.link || input.id || "");
+  }
+  return String(input);
+}
+
+/**
+ * 列表请求（支持分页与通配符浏览）
  */
 async function fetchList(keyword = "", page = 1) {
   try {
     const limit = 24;
     const offset = Math.max(0, (page - 1) * limit);
-    let url = `${BASE_URL}/get_list?offset=${offset}&limit=${limit}`;
     
-    if (keyword && keyword.trim()) {
-      url += `&vod_name=${encodeURIComponent(keyword.trim())}`;
-    }
+    // 如果没有关键词，使用通配符 % 查询以拉取全部/最新作品
+    const queryWord = keyword && keyword.trim() ? keyword.trim() : "%";
+    const url = `${BASE_URL}/get_list?vod_name=${encodeURIComponent(queryWord)}&offset=${offset}&limit=${limit}`;
 
     const resp = await fetch(url, { headers: HEADERS });
     const data = await resp.json();
@@ -39,10 +60,8 @@ async function fetchList(keyword = "", page = 1) {
       type: "anime"
     }));
 
-    // 双重兼容：同时支持纯数组格式和对象分页格式
     items.list = items;
     items.hasNextPage = rows.length >= limit;
-
     return items;
   } catch (e) {
     console.error("[GiriGiriLove] fetchList error:", e);
@@ -54,32 +73,35 @@ async function fetchList(keyword = "", page = 1) {
 }
 
 /**
- * 获取首页 / 热门番剧（解决进入页面显示“没有作品”的关键）
+ * 1. 首页/热门浏览
  */
 async function getPopular(page = 1) {
   return await fetchList("", page);
 }
 
 /**
- * 获取最新更新
+ * 2. 最新更新浏览
  */
 async function getLatestUpdates(page = 1) {
   return await fetchList("", page);
 }
 
 /**
- * 搜索番剧
+ * 3. 搜索接口
  */
 async function search(query, page = 1) {
   return await fetchList(query, page);
 }
 
 /**
- * 获取番剧详情与集数列表
+ * 4. 详情接口（自动解包 ID）
  */
-async function getDetail(id) {
+async function getDetail(input) {
   try {
-    const url = `${BASE_URL}/get_detail?vod_id=${encodeURIComponent(id)}`;
+    const vodId = extractVodId(input);
+    if (!vodId) return null;
+
+    const url = `${BASE_URL}/get_detail?vod_id=${encodeURIComponent(vodId)}`;
     const resp = await fetch(url, { headers: HEADERS });
     const data = await resp.json();
     const info = (data && data.info) || {};
@@ -87,7 +109,7 @@ async function getDetail(id) {
     const playFroms = (info.vod_play_from || "").split("$$$");
     const playUrls = (info.vod_play_url || "").split("$$$");
 
-    const flatChapters = [];
+    const flatEpisodes = [];
     const sources = [];
 
     for (let i = 0; i < playFroms.length; i++) {
@@ -97,17 +119,20 @@ async function getDetail(id) {
       const episodes = epStrings.map((epStr, index) => {
         const parts = epStr.split("$");
         const epTitle = parts[0] || `第 ${index + 1} 集`;
-        const epUrl = parts[1] || "";
-        
+        const epUrl = parts.slice(1).join("$") || "";
+
         const epObj = {
-          id: `${id}_${i}_${index}`,
-          name: playFroms.length > 1 ? `[${routeName}] ${epTitle}` : epTitle,
+          id: epUrl, // 集数 ID 直接绑定为 m3u8 地址
+          number: index + 1,
+          episode: index + 1,
           title: epTitle,
+          name: playFroms.length > 1 ? `[${routeName}] ${epTitle}` : epTitle,
           url: epUrl,
-          number: index + 1
+          link: epUrl,
+          streamUrl: epUrl
         };
 
-        flatChapters.push(epObj);
+        flatEpisodes.push(epObj);
         return epObj;
       });
 
@@ -120,7 +145,7 @@ async function getDetail(id) {
     }
 
     return {
-      id: String(info.vod_id || id),
+      id: String(info.vod_id || vodId),
       name: info.vod_name || "",
       title: info.vod_name || "",
       imageUrl: info.vod_pic || "",
@@ -129,9 +154,9 @@ async function getDetail(id) {
       description: info.vod_content || info.vod_blurb || "",
       status: 1,
       genre: (info.vod_class || "").split(",").filter(Boolean),
-      chapters: flatChapters, // 兼容单列表模式
-      episodes: flatChapters,
-      sources: sources        // 兼容多线路模式
+      episodes: flatEpisodes,
+      chapters: flatEpisodes,
+      sources: sources
     };
   } catch (e) {
     console.error("[GiriGiriLove] getDetail error:", e);
@@ -140,33 +165,47 @@ async function getDetail(id) {
 }
 
 /**
- * 视频播放地址提取（同时提供 getStreams 与 getVideoList 接口）
+ * 5. Zangetsu 原生集数接口：getEpisodes
  */
-async function getVideoList(url) {
-  if (!url) return [];
-  return [
-    {
-      url: url,
-      originalUrl: url,
-      quality: "默认",
-      headers: HEADERS
-    }
-  ];
+async function getEpisodes(input) {
+  const detail = await getDetail(input);
+  if (!detail) return [];
+  return detail.episodes || detail.chapters || [];
 }
 
-async function getStreams(url) {
-  if (!url) return [];
-  return [
-    {
-      name: "GiriGiri HLS",
-      title: "GiriGiri HLS",
-      url: url,
-      type: "hls",
-      quality: "默认",
-      headers: HEADERS
-    }
-  ];
+/**
+ * 6. Zangetsu 原生流提取接口：getStream
+ */
+async function getStream(input) {
+  const streamUrl = extractStreamUrl(input);
+  if (!streamUrl) return null;
+
+  // 构造全兼容返回结构（同时兼容纯对象、stream属性对象以及数组格式）
+  const streamItem = {
+    name: "GiriGiriLove HLS",
+    title: "默认",
+    url: streamUrl,
+    type: "hls",
+    quality: "1080p",
+    headers: HEADERS
+  };
+
+  const result = [streamItem];
+  result.stream = streamItem;
+  result.url = streamUrl;
+  result.type = "hls";
+  result.headers = HEADERS;
+  result.subtitles = [];
+
+  return result;
 }
+
+// 兼容各种命名风格别名
+const getStreams = getStream;
+const getVideoList = getStream;
+const getDetails = getDetail;
+const popular = getPopular;
+const latest = getLatestUpdates;
 
 // 全局暴露与模块兼容导出
 if (typeof globalThis !== "undefined") {
@@ -174,8 +213,11 @@ if (typeof globalThis !== "undefined") {
   globalThis.getLatestUpdates = getLatestUpdates;
   globalThis.search = search;
   globalThis.getDetail = getDetail;
+  globalThis.getDetails = getDetail;
+  globalThis.getEpisodes = getEpisodes;
+  globalThis.getStream = getStream;
+  globalThis.getStreams = getStream;
   globalThis.getVideoList = getVideoList;
-  globalThis.getStreams = getStreams;
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -184,7 +226,10 @@ if (typeof module !== "undefined" && module.exports) {
     getLatestUpdates,
     search,
     getDetail,
-    getVideoList,
-    getStreams
+    getDetails,
+    getEpisodes,
+    getStream,
+    getStreams,
+    getVideoList
   };
 }
