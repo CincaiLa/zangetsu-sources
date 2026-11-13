@@ -1,15 +1,14 @@
 {
-  "name": "My Zangetsu Sources",
-  "description": "Personal Zangetsu sources.",
+  "name": "Custom Anime Providers",
+  "description": "Custom anime extensions for Zangetsu",
   "sources": [
     {
       "id": "girigirilove",
-      "name": "girigiriLove",
-      "version": "1.5.3",
+      "name": "GiriGiriLove",
+      "version": "1.0.0",
       "type": "anime",
       "lang": "zh",
       "file": "providers/girigirilove.js",
-      "logo": "icons/girigirilove.png",
       "nsfw": false
     }
   ]
