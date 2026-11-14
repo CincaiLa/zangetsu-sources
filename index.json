@@ -1,11 +1,17 @@
 
 {
-  "id": "girigirilove",
-  "name": "GirigiriLove",
-  "version": "1.0.0",
-  "type": "anime",
-  "lang": "zh",
-  "file": "providers/girigirilove.js",
-  "logo": "https://ani.girigirilove.com/favicon.ico",
-  "nsfw": false
+  "name": "CincaiLa Sources",
+  "description": "Anime streaming sources for Zangetsu.",
+  "sources": [
+    {
+      "id": "girigirilove",
+      "name": "GirigiriLove",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "zh",
+      "file": "providers/girigirilove.js",
+      "logo": "https://ani.girigirilove.com/favicon.ico",
+      "nsfw": false
+    }
+  ]
 }
