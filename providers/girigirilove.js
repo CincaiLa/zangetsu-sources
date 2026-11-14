@@ -1,230 +1,345 @@
-// GiriGiriLove — Zangetsu JS provider
-// Converted from Predidit/KazumiRules giriGiriLove.json (v2.6, API level 9)
-//
-// Kazumi rule -> this file
-//   searchApiConfig  -> search()
-//   chapterApiConfig -> getDetail() / getEpisodes() / getVideoSources()
-//   baseURL          -> BASE (used for Referer)
 
-var VERSION = "2.6.1";
-var BASE = "https://ani.girigirilove.com";
-var API = "https://m3u8.girigirilove.com/api.php/Vod";
-var UA =
-  "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
-  "Chrome/124.0 Mobile Safari/537.36";
+// GirigiriLove — Zangetsu anime provider
+// Adapted from Predidit/KazumiRules giriGiriLove.json
 
-var HEADERS = { "User-Agent": UA, Referer: BASE + "/" };
+var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
+  ? String(__SOURCE_ID) : 'girigirilove';
 
-// ---------------------------------------------------------------- helpers
+var SITE = 'https://ani.girigirilove.com';
+var API = 'https://m3u8.girigirilove.com/api.php/Vod/';
+var PLAYER = 'https://pl.girigirilove.com/addons/aplyer/atom.php';
 
-function log(msg) {
-  try { console.log("[girigirilove] " + msg); } catch (e) {}
-}
-
-async function rawGet(url) {
-  // Try whichever HTTP primitive the Zangetsu JS runtime exposes.
-  if (typeof fetch === "function") return await fetch(url, { headers: HEADERS });
-  if (typeof http !== "undefined" && http.get) return await http.get(url, { headers: HEADERS });
-  if (typeof httpGet === "function") return await httpGet(url, HEADERS);
-  if (typeof request === "function") return await request(url, { headers: HEADERS });
-  throw new Error("no HTTP function available in this runtime");
-}
-
-async function getJson(url) {
-  var res;
-  try {
-    res = await rawGet(url);
-  } catch (e) {
-    log("request failed: " + url + " -> " + e);
-    throw e;
-  }
-  var body = res;
-  if (res && typeof res.json === "function") {
-    try { return await res.json(); } catch (e) { log("bad json from " + url); throw e; }
-  }
-  if (res && typeof res.text === "function") body = await res.text();
-  else if (res && typeof res.body === "string") body = res.body;
-  else if (res && typeof res.data !== "undefined") body = res.data;
-  if (typeof body === "string") {
-    try { return JSON.parse(body); } catch (e) { log("non-JSON response: " + body.slice(0, 120)); throw e; }
-  }
-  return body; // runtime already parsed it
-}
-
-function rowsOf(j) {
-  if (!j) return [];
-  if (j.info && Array.isArray(j.info.rows)) return j.info.rows;
-  if (j.info && Array.isArray(j.info.list)) return j.info.list;
-  if (Array.isArray(j.rows)) return j.rows;
-  if (Array.isArray(j.list)) return j.list;
-  if (j.data && Array.isArray(j.data.rows)) return j.data.rows;
-  if (Array.isArray(j.data)) return j.data;
-  return [];
-}
-
-// Kazumi: format "delimited", roadSeparator "$$$", episodeSeparator "#", fieldSeparator "$"
-function parsePlay(from, urls) {
-  var names = String(from || "").split("$$$");
-  var roads = String(urls || "").split("$$$");
-  return roads
-    .map(function (road, i) {
-      var eps = road
-        .split("#")
-        .filter(Boolean)
-        .map(function (raw, n) {
-          var k = raw.indexOf("$");
-          return {
-            name: k < 0 ? "第" + (n + 1) + "集" : raw.slice(0, k) || "第" + (n + 1) + "集",
-            url: k < 0 ? raw : raw.slice(k + 1),
-          };
-        });
-      return { name: names[i] || "线路" + (i + 1), episodes: eps };
-    })
-    .filter(function (r) {
-      return r.episodes.length;
-    });
-}
-
-// episode ref = "<vod_id>|<episode index>"
-function makeRef(id, idx) {
-  return id + "|" + idx;
-}
-function parseRef(ref) {
-  var p = String(ref).split("|");
-  return { id: p[0], idx: parseInt(p[1] || "0", 10) || 0 };
-}
-
-async function fetchDetail(id) {
-  var j = await getJson(API + "/get_detail?vod_id=" + encodeURIComponent(id));
-  return (j && j.info) || {};
-}
-
-function isDirect(u) {
-  return /\.(m3u8|mp4|mkv|flv)(\?|#|$)/i.test(u);
-}
-
-// ------------------------------------------------------------- contract
+var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 function getInfo() {
   return {
-    id: "girigirilove",
-    name: "GiriGiriLove",
-    version: VERSION,
-    type: "anime",
-    lang: "zh",
-    nsfw: false,
+    name: 'GirigiriLove',
+    lang: 'zh',
+    baseUrl: SITE,
+    logo: SITE + '/favicon.ico',
+    type: 'anime',
+    version: '1.0.0'
   };
 }
 
-function getSettings() {
-  return [];
-}
+// ── HTTP ────────────────────────────────────────────────────────────────────
 
-async function getHome() {
-  // Kazumi rule has no home/browse endpoint; reuse the list API with an empty keyword.
-  var j = await getJson(API + "/get_list?offset=0&limit=24");
-  var rows = (j && j.info && j.info.rows) || [];
-  return [{ title: "最新", items: rows.map(toItem) }];
-}
-
-function toItem(r) {
-  var id = String(r.vod_id);
+function _headers(ref) {
   return {
-    id: id,
-    url: id,
-    title: r.vod_name,
-    name: r.vod_name,
-    poster: r.vod_pic || r.vod_pic_thumb || "",
-    image: r.vod_pic || r.vod_pic_thumb || "",
+    'User-Agent': UA,
+    'Referer': ref || SITE + '/'
   };
 }
 
-// searchApiConfig: GET get_list?vod_name=@keyword&offset=0&limit=24
-// listPath $.info.rows[*], namePath $.vod_name, sourcePath $.vod_id
-async function search(query, page) {
-  var p = Math.max(1, parseInt(page || 1, 10));
-  var limit = 24;
-  var q = String(query || "").trim();
-  var tries = [q];
-  // fall back to a shorter keyword (drop season/part suffixes, then first 4 chars)
-  var base = q.replace(/\s*(第[一二三四五六七八九十\d]+[季期部]|season\s*\d+|part\s*\d+).*$/i, "").trim();
-  if (base && base !== q) tries.push(base);
-  if (base.length > 4) tries.push(base.slice(0, 4));
-
-  for (var i = 0; i < tries.length; i++) {
-    var j = await getJson(
-      API +
-        "/get_list?vod_name=" + encodeURIComponent(tries[i]) +
-        "&offset=" + (p - 1) * limit +
-        "&limit=" + limit
-    );
-    var rows = rowsOf(j);
-    log("search '" + tries[i] + "' -> " + rows.length + " rows");
-    if (rows.length) return rows.map(toItem);
-  }
-  return [];
+function _get(url, ref) {
+  return fetch(url, { headers: _headers(ref) })
+    .then(function (r) {
+      return r.body || '';
+    });
 }
 
-// chapterApiConfig: GET get_detail?vod_id=@source
-async function getDetail(url) {
-  var id = String(url).split("|")[0];
-  var info = await fetchDetail(id);
-  var roads = parsePlay(info.vod_play_from, info.vod_play_url);
-  var longest = roads.reduce(function (a, r) {
-    return r.episodes.length > a.length ? r.episodes : a;
-  }, []);
-
-  var episodes = longest.map(function (e, i) {
-    return { number: i + 1, title: e.name, name: e.name, url: makeRef(id, i) };
+function _json(url, ref) {
+  return _get(url, ref).then(function (body) {
+    try {
+      return JSON.parse(body || 'null');
+    } catch (e) {
+      throw new Error('GirigiriLove: invalid API response');
+    }
   });
+}
+
+function _str(v) {
+  return v == null ? '' : String(v);
+}
+
+function _clean(s) {
+  return htmlText(String(s || '').replace(/<[^>]*>/g, ''))
+    .replace(/^\s+|\s+$/g, '');
+}
+
+function _first(v) {
+  return Array.isArray(v) ? (v[0] || {}) : (v || {});
+}
+
+function _rows(json) {
+  var info = json && json.info;
+  if (!info) return [];
+  if (Array.isArray(info.rows)) return info.rows;
+  if (Array.isArray(info)) return info;
+  if (info.vod_id != null) return [info];
+  return [];
+}
+
+function _cover(row) {
+  var p = _str(row.vod_pic || row.vod_pic_thumb || '');
+  if (p && p.indexOf('//') === 0) return 'https:' + p;
+  return p || null;
+}
+
+function _item(row) {
+  var id = _str(row.vod_id);
+  var title = _clean(row.vod_name || row.vod_en || id);
 
   return {
     id: id,
+    title: title,
+    englishTitle: _clean(row.vod_en || row.vod_name || id),
+    cover: _cover(row),
     url: id,
-    title: info.vod_name || "",
-    name: info.vod_name || "",
-    poster: info.vod_pic || "",
-    image: info.vod_pic || "",
-    description: String(info.vod_content || info.vod_blurb || "").replace(/<[^>]+>/g, ""),
-    year: info.vod_year ? String(info.vod_year) : undefined, // must be a String, not int
-    status: info.vod_remarks || undefined,
-    genres: info.vod_class ? String(info.vod_class).split(/[,，]/) : [],
-    episodes: episodes,
+    type: 'anime',
+    sourceId: SOURCE_ID,
+    description: _clean(row.vod_blurb || row.vod_content || ''),
+    year: _str(row.vod_year || '') || null,
+    status: _clean(row.vod_remarks || '')
   };
 }
 
-async function getEpisodes(url) {
-  var d = await getDetail(url);
-  return d.episodes;
+// ── Search ──────────────────────────────────────────────────────────────────
+
+function search(query, page, opts) {
+  var q = String(query || '').trim();
+  if (!q) return Promise.resolve([]);
+
+  var p = Math.max(1, parseInt(page || 1, 10) || 1);
+  var offset = (p - 1) * 24;
+
+  var url = API + 'get_list?vod_name=' + encodeURIComponent(q)
+    + '&offset=' + offset + '&limit=24';
+
+  return _json(url, SITE + '/')
+    .then(function (json) {
+      return _rows(json).map(_item);
+    })
+    .catch(function () {
+      return [];
+    });
 }
 
-// One source per road (线路), like Kazumi's multi-source (muliSources: true)
-async function getVideoSources(url) {
-  var ref = parseRef(url);
-  var info = await fetchDetail(ref.id);
-  var roads = parsePlay(info.vod_play_from, info.vod_play_url);
+// ── Detail + Episodes ───────────────────────────────────────────────────────
+
+function _splitPlaySources(info) {
+  var names = _str(info.vod_play_from || '').split('$$$');
+  var lists = _str(info.vod_play_url || '').split('$$$');
+
   var out = [];
 
-  for (var i = 0; i < roads.length; i++) {
-    var ep = roads[i].episodes[ref.idx];
-    if (!ep || !ep.url) continue;
-    var u = ep.url.replace(/^http:\/\//i, "https://");
-    out.push({
-      url: u,
-      quality: roads[i].name,
-      label: roads[i].name,
-      server: roads[i].name,
-      isM3U8: /\.m3u8(\?|#|$)/i.test(u),
-      type: /\.m3u8(\?|#|$)/i.test(u) ? "hls" : "video",
-      headers: HEADERS,
-      // Non-direct URLs are web pages that Kazumi would sniff in a WebView.
-      // Zangetsu's JS bridge can't do that, so they are flagged here.
-      needsWebview: !isDirect(u),
-    });
+  for (var i = 0; i < lists.length; i++) {
+    var routeName = _clean(names[i] || ('线路 ' + (i + 1)));
+    var entries = lists[i].split('#');
+
+    for (var j = 0; j < entries.length; j++) {
+      var raw = entries[j];
+      if (!raw) continue;
+
+      var at = raw.indexOf('$');
+      var epName = at >= 0
+        ? raw.substring(0, at)
+        : ('第' + (j + 1) + '集');
+
+      var epUrl = at >= 0
+        ? raw.substring(at + 1)
+        : raw;
+
+      epUrl = String(epUrl || '').trim();
+      if (!epUrl) continue;
+
+      out.push({
+        id: String(i) + ':' + String(j),
+        number: j + 1,
+        title: _clean(epName) || ('Episode ' + (j + 1)),
+        url: 'girigirilove://' + encodeURIComponent(routeName)
+          + '/' + encodeURIComponent(epUrl)
+      });
+    }
   }
+
   return out;
 }
 
-async function getStreams(url) {
-  return getVideoSources(url);
+function getDetail(url, opts) {
+  var id = String(url || '').trim();
+  if (!id) return Promise.resolve(null);
+
+  return _json(
+    API + 'get_detail?vod_id=' + encodeURIComponent(id),
+    SITE + '/'
+  ).then(function (json) {
+    var info = _first(json && json.info);
+    var row = _rows(json)[0] || info;
+    var eps = _splitPlaySources(info);
+
+    return {
+      id: _str(info.vod_id || id),
+      title: _clean(info.vod_name || row.vod_name || id),
+      englishTitle: _clean(
+        info.vod_en || info.vod_name || row.vod_name || id
+      ),
+      url: _str(info.vod_id || id),
+      cover: _cover(info) || _cover(row),
+      description: _clean(
+        info.vod_content || info.vod_blurb || ''
+      ),
+      status: _clean(info.vod_remarks || ''),
+      year: _str(info.vod_year || '') || null,
+      genres: _str(info.vod_class || '')
+        .split(/[，,、]/).filter(Boolean),
+      type: 'anime',
+      sourceId: SOURCE_ID,
+      episodes: eps
+    };
+  });
+}
+
+function getEpisodes(url, opts) {
+  return getDetail(url, opts).then(function (d) {
+    return d && d.episodes ? d.episodes : [];
+  });
+}
+
+// ── Player URL ──────────────────────────────────────────────────────────────
+
+function _decodeEpisodeUrl(value) {
+  var s = String(value || '').replace(/^girigirilove:\/\//, '');
+
+  // Remove the route name, retaining the original episode URL.
+  var slash = s.indexOf('/');
+  if (slash >= 0) {
+    s = s.substring(slash + 1);
+  }
+
+  try {
+    return decodeURIComponent(s);
+  } catch (e) {
+    return s;
+  }
+}
+
+function _absolute(url, base) {
+  var u = String(url || '').trim();
+  if (!u) return '';
+
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.indexOf('//') === 0) return 'https:' + u;
+
+  if (u.charAt(0) === '/') {
+    var origin = (String(base).match(/^https?:\/\/[^/]+/i) || [''])[0];
+    return origin + u;
+  }
+
+  return String(base || '') + '/' + u;
+}
+
+function _extractPlayable(body, base) {
+  var text = String(body || '');
+  var found = [];
+  var seen = {};
+
+  var patterns = [
+    /https?:\\?\/\\?\/[^"'\\\s<>]+?\.m3u8(?:\?[^"'\\\s<>]*)?/ig,
+    /https?:\\?\/\\?\/[^"'\\\s<>]+?\.mp4(?:\?[^"'\\\s<>]*)?/ig,
+    /(?:file|url|src)\s*[:=]\s*["']([^"']+)["']/ig
+  ];
+
+  for (var p = 0; p < patterns.length; p++) {
+    var m;
+
+    while ((m = patterns[p].exec(text)) !== null) {
+      var candidate = (m[1] || m[0])
+        .replace(/\\\//g, '/')
+        .replace(/&amp;/g, '&');
+
+      candidate = _absolute(candidate, base);
+
+      if (/^https?:\/\//i.test(candidate) && !seen[candidate]) {
+        seen[candidate] = 1;
+        found.push(candidate);
+      }
+    }
+  }
+
+  return found;
+}
+
+// ── Video Sources ───────────────────────────────────────────────────────────
+
+function _makeStreams(urls, ref) {
+  return urls.map(function (u, i) {
+    return {
+      url: u,
+      quality: i === 0 ? 'auto' : 'source ' + (i + 1),
+      container: /\.m3u8(\?|$)/i.test(u) ? 'hls' : 'mp4',
+      headers: _headers(ref),
+      kind: 'sub'
+    };
+  });
+}
+
+function getVideoSources(episodeUrl) {
+  var target = _decodeEpisodeUrl(episodeUrl);
+
+  if (!target) {
+    return Promise.reject(
+      new Error('GirigiriLove: empty episode URL')
+    );
+  }
+
+  var url = PLAYER + '?key=0&url=' + encodeURIComponent(target);
+
+  return _get(url, SITE + '/').then(function (body) {
+    var streams = _extractPlayable(body, PLAYER);
+
+    if (streams.length) {
+      return _makeStreams(streams, PLAYER);
+    }
+
+    // Some responses return the actual URL as JSON.
+    var json;
+
+    try {
+      json = JSON.parse(body || 'null');
+    } catch (e) {
+      json = null;
+    }
+
+    if (json) {
+      var direct = json.url || json.src || json.file
+        || (json.data && (
+          json.data.url || json.data.src || json.data.file
+        ));
+
+      if (direct) {
+        var resolved = _absolute(direct, PLAYER);
+        return _makeStreams([resolved], PLAYER);
+      }
+    }
+
+    // Some player pages embed the player in an iframe.
+    var iframe = (
+      body.match(/<iframe[^>]+src=["']([^"']+)["']/i) || []
+    )[1];
+
+    if (iframe) {
+      var iframeUrl = _absolute(
+        iframe.replace(/&amp;/g, '&'),
+        PLAYER
+      );
+
+      return _get(iframeUrl, PLAYER).then(function (inner) {
+        var links = _extractPlayable(inner, iframeUrl);
+
+        if (!links.length) {
+          throw new Error(
+            'GirigiriLove: no playable stream found'
+          );
+        }
+
+        return _makeStreams(links, iframeUrl);
+      });
+    }
+
+    throw new Error(
+      'GirigiriLove: player did not expose a playable URL'
+    );
+  });
 }
