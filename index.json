@@ -1,15 +1,11 @@
+
 {
-  "name": "GiriGiriLove (from KazumiRules)",
-  "description": "Zangetsu provider converted from Predidit/KazumiRules giriGiriLove.json v2.6",
-  "sources": [
-    {
-      "id": "girigirilove",
-      "name": "GiriGiriLove",
-      "version": "2.6.1",
-      "type": "anime",
-      "lang": "zh",
-      "file": "girigirilove.js",
-      "nsfw": false
-    }
-  ]
+  "id": "girigirilove",
+  "name": "GirigiriLove",
+  "version": "1.0.0",
+  "type": "anime",
+  "lang": "zh",
+  "file": "providers/girigirilove.js",
+  "logo": "https://ani.girigirilove.com/favicon.ico",
+  "nsfw": false
 }
