@@ -6,7 +6,7 @@
 //   chapterApiConfig -> getDetail() / getEpisodes() / getVideoSources()
 //   baseURL          -> BASE (used for Referer)
 
-var VERSION = "2.6.0";
+var VERSION = "2.6.1";
 var BASE = "https://ani.girigirilove.com";
 var API = "https://m3u8.girigirilove.com/api.php/Vod";
 var UA =
@@ -17,12 +17,49 @@ var HEADERS = { "User-Agent": UA, Referer: BASE + "/" };
 
 // ---------------------------------------------------------------- helpers
 
+function log(msg) {
+  try { console.log("[girigirilove] " + msg); } catch (e) {}
+}
+
+async function rawGet(url) {
+  // Try whichever HTTP primitive the Zangetsu JS runtime exposes.
+  if (typeof fetch === "function") return await fetch(url, { headers: HEADERS });
+  if (typeof http !== "undefined" && http.get) return await http.get(url, { headers: HEADERS });
+  if (typeof httpGet === "function") return await httpGet(url, HEADERS);
+  if (typeof request === "function") return await request(url, { headers: HEADERS });
+  throw new Error("no HTTP function available in this runtime");
+}
+
 async function getJson(url) {
-  var res = await fetch(url, { headers: HEADERS });
-  if (res && typeof res.json === "function") return await res.json();
-  if (res && typeof res.text === "function") return JSON.parse(await res.text());
-  if (typeof res === "string") return JSON.parse(res);
-  return res; // runtime already parsed it
+  var res;
+  try {
+    res = await rawGet(url);
+  } catch (e) {
+    log("request failed: " + url + " -> " + e);
+    throw e;
+  }
+  var body = res;
+  if (res && typeof res.json === "function") {
+    try { return await res.json(); } catch (e) { log("bad json from " + url); throw e; }
+  }
+  if (res && typeof res.text === "function") body = await res.text();
+  else if (res && typeof res.body === "string") body = res.body;
+  else if (res && typeof res.data !== "undefined") body = res.data;
+  if (typeof body === "string") {
+    try { return JSON.parse(body); } catch (e) { log("non-JSON response: " + body.slice(0, 120)); throw e; }
+  }
+  return body; // runtime already parsed it
+}
+
+function rowsOf(j) {
+  if (!j) return [];
+  if (j.info && Array.isArray(j.info.rows)) return j.info.rows;
+  if (j.info && Array.isArray(j.info.list)) return j.info.list;
+  if (Array.isArray(j.rows)) return j.rows;
+  if (Array.isArray(j.list)) return j.list;
+  if (j.data && Array.isArray(j.data.rows)) return j.data.rows;
+  if (Array.isArray(j.data)) return j.data;
+  return [];
 }
 
 // Kazumi: format "delimited", roadSeparator "$$$", episodeSeparator "#", fieldSeparator "$"
@@ -107,14 +144,25 @@ function toItem(r) {
 async function search(query, page) {
   var p = Math.max(1, parseInt(page || 1, 10));
   var limit = 24;
-  var j = await getJson(
-    API +
-      "/get_list?vod_name=" + encodeURIComponent(query) +
-      "&offset=" + (p - 1) * limit +
-      "&limit=" + limit
-  );
-  var rows = (j && j.info && j.info.rows) || [];
-  return rows.map(toItem);
+  var q = String(query || "").trim();
+  var tries = [q];
+  // fall back to a shorter keyword (drop season/part suffixes, then first 4 chars)
+  var base = q.replace(/\s*(第[一二三四五六七八九十\d]+[季期部]|season\s*\d+|part\s*\d+).*$/i, "").trim();
+  if (base && base !== q) tries.push(base);
+  if (base.length > 4) tries.push(base.slice(0, 4));
+
+  for (var i = 0; i < tries.length; i++) {
+    var j = await getJson(
+      API +
+        "/get_list?vod_name=" + encodeURIComponent(tries[i]) +
+        "&offset=" + (p - 1) * limit +
+        "&limit=" + limit
+    );
+    var rows = rowsOf(j);
+    log("search '" + tries[i] + "' -> " + rows.length + " rows");
+    if (rows.length) return rows.map(toItem);
+  }
+  return [];
 }
 
 // chapterApiConfig: GET get_detail?vod_id=@source
