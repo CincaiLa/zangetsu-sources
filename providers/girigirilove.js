@@ -1,4 +1,4 @@
-const baseUrl = "https://anime.girigirilove.com"; // 确认该域名在你的网络环境下可直接打开
+const baseUrl = "https://anime.girigirilove.com"; // 确保这是你当前能打开的最新可用域名
 
 const Provider = {
     id: "girigirilove",
@@ -7,70 +7,61 @@ const Provider = {
     lang: "zh",
     type: "anime",
 
-    // 1. 首页/热门列表（点进源主页时默认加载，缺失会导致报错）
+    // 1. 首页/推荐列表：直接调用苹果CMS的 api.php 接口获取最新动漫
     async getPopular(page = 1) {
-        const url = `${baseUrl}/show/2--------${page}---.html`; // 根据实际分类页 URL 调整
-        const res = await fetch(url, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
-        });
-        const html = await res.text();
-        const $ = cheerio.load(html);
-        const results = [];
+        try {
+            const url = `${baseUrl}/api.php/provide/vod?ac=detail&pg=${page}`;
+            const res = await fetch(url);
+            const data = await res.json();
 
-        // 苹果CMS常见结构示例，请根据实际网页元素微调
-        $('.public-list-box').each((_, el) => {
-            const title = $(el).find('.time-title').text().trim();
-            const href = $(el).find('a').attr('href');
-            const cover = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
-            if (title && href) {
-                results.push({
-                    title,
-                    url: href.startsWith('http') ? href : `${baseUrl}${href}`,
-                    cover: cover?.startsWith('http') ? cover : `${baseUrl}${cover}`
-                });
-            }
-        });
-        return results;
+            if (!data || !data.list) return [];
+
+            return data.list.map(item => ({
+                title: item.vod_name,
+                url: `${baseUrl}/index.php/vod/detail/id/${item.vod_id}.html`,
+                cover: item.vod_pic,
+                // 顺便可以带上更新状态或集数
+                description: item.vod_remarks || ''
+            }));
+        } catch (e) {
+            return [];
+        }
     },
 
-    // 2. 搜索功能（点击右上角放大镜时调用）
+    // 2. 搜索功能：同样对接 api.php 接口，百分之百精准
     async search(query, page = 1) {
-        const url = `${baseUrl}/search/-------------/?wd=${encodeURIComponent(query)}&page=${page}`;
-        const res = await fetch(url, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
-        });
-        const html = await res.text();
-        const $ = cheerio.load(html);
-        const results = [];
+        try {
+            const url = `${baseUrl}/api.php/provide/vod?ac=detail&wd=${encodeURIComponent(query)}&pg=${page}`;
+            const res = await fetch(url);
+            const data = await res.json();
 
-        $('.search-box, .public-list-box').each((_, el) => {
-            const title = $(el).find('.thumb-txt, .time-title').text().trim();
-            const href = $(el).find('a').attr('href');
-            const cover = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
-            if (title && href) {
-                results.push({
-                    title,
-                    url: href.startsWith('http') ? href : `${baseUrl}${href}`,
-                    cover: cover?.startsWith('http') ? cover : `${baseUrl}${cover}`
-                });
-            }
-        });
-        return results;
+            if (!data || !data.list) return [];
+
+            return data.list.map(item => ({
+                title: item.vod_name,
+                url: `${baseUrl}/index.php/vod/detail/id/${item.vod_id}.html`,
+                cover: item.vod_pic,
+                description: item.vod_remarks || ''
+            }));
+        } catch (e) {
+            return [];
+        }
     },
 
-    // 3. 详情与剧集列表
+    // 3. 获取详情与剧集列表
     async getDetail(url) {
-        const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
-        const res = await fetch(fullUrl);
+        // 如果 url 是 API 详情页，或者我们直接通过网页抓取详情
+        const res = await fetch(url);
         const html = await res.text();
         const $ = cheerio.load(html);
 
-        const title = $('h3.slide-info-title').text().trim();
-        const description = $('#height_limit').text().trim();
-        const cover = $('.detail-pic img').attr('data-src') || $('.detail-pic img').attr('src');
+        const title = $('h1, h3.slide-info-title, .detail-title').text().trim();
+        const description = $('.vod_content, #height_limit, .detail-content').text().trim();
+        const cover = $('.detail-pic img, .lazyload').attr('data-original') || $('.detail-pic img').attr('src');
 
         const episodes = [];
-        $('.anthology-list-play a').each((_, el) => {
+        // 匹配剧集播放列表
+        $('.play_list_box a, .anthology-list-play a, .num-list a').each((_, el) => {
             const epUrl = $(el).attr('href');
             episodes.push({
                 name: $(el).text().trim(),
@@ -83,16 +74,16 @@ const Provider = {
 
     // 4. 解析播放直链
     async getVideoSource(url) {
-        const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
-        const res = await fetch(fullUrl);
+        const res = await fetch(url);
         const html = await res.text();
-
-        // 从网页源码的 player_aaaa 变量中提取真实播放地址
-        const match = html.match(/var player_aaaa=({.*?})<\/script>/);
+        
         let videoUrl = "";
+        const match = html.match(/var player_aaaa=({.*?})<\/script>/);
         if (match && match[1]) {
-            const playerData = JSON.parse(match[1]);
-            videoUrl = decodeURIComponent(playerData.url);
+            try {
+                const playerData = JSON.parse(match[1]);
+                videoUrl = decodeURIComponent(playerData.url);
+            } catch (e) {}
         }
 
         return {
