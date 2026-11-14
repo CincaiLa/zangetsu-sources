@@ -116,6 +116,43 @@ function search(query, page, opts) {
     });
 }
 
+// ── Popular + Home ──────────────────────────────────────────────────────────
+
+// Fetch the site's catalogue without a search keyword.
+function popular(opts) {
+  var page = 1;
+
+  if (opts && typeof opts.page === 'number') {
+    page = Math.max(1, opts.page);
+  }
+
+  var offset = (page - 1) * 24;
+
+  var url = API + 'get_list?offset=' + offset
+    + '&limit=24';
+
+  return _json(url, SITE + '/')
+    .then(function (json) {
+      return _rows(json).map(_item);
+    })
+    .catch(function (e) {
+      console.log('GirigiriLove popular error: ' + e);
+      return [];
+    });
+}
+
+// Zangetsu home page.
+function getHome(opts) {
+  return popular(opts).then(function (items) {
+    if (!items.length) return [];
+
+    return [{
+      title: '最新动漫',
+      items: items
+    }];
+  });
+}
+
 // ── Detail + Episodes ───────────────────────────────────────────────────────
 
 function _splitPlaySources(info) {
