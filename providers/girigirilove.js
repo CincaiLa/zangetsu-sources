@@ -2,7 +2,7 @@
 /*
  * GirigiriLove — Zangetsu Anime Provider
  * Compatible with Zangetsu v2.3.5
- * Version: 1.0.3
+ * Version: 1.0.4
  */
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
@@ -11,10 +11,9 @@ var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
 
 var SITE = 'https://ani.girigirilove.com';
 var API = 'https://m3u8.girigirilove.com/api.php/Vod/';
-var PLAYER = 'https://pl.girigirilove.com/addons/aplyer/atom.php';
 
-var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-  + '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 var PAGE_SIZE = 24;
 
@@ -29,7 +28,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/favicon.ico',
     type: 'anime',
-    version: '1.0.3'
+    version: '1.0.4'
   };
 }
 
@@ -128,7 +127,15 @@ function _cover(row) {
     return 'https:' + image;
   }
 
-  return image;
+  if (/^https?:\/\//i.test(image)) {
+    return image;
+  }
+
+  if (image.charAt(0) === '/') {
+    return SITE + image;
+  }
+
+  return 'https://jpg.girigirilove.com/' + image;
 }
 
 // --------------------------------------------------
@@ -284,48 +291,77 @@ function _splitPlaySources(info) {
     info.vod_play_url || ''
   ).split('$$$');
 
-  var result = [];
+  var routes = [];
 
   for (var i = 0; i < lists.length; i++) {
-    var routeName = _clean(
-      names[i] || ('线路 ' + (i + 1))
-    );
+    var routeName = _str(names[i] || '')
+      .trim()
+      .toLowerCase();
 
-    var entries = lists[i].split('#');
+    var entries = _str(lists[i]).split('#');
 
-    for (var j = 0; j < entries.length; j++) {
-      var raw = entries[j];
+    if (!entries.length) continue;
 
-      if (!raw) continue;
+    routes.push({
+      name: routeName,
+      entries: entries,
+      index: i
+    });
+  }
 
-      var separator = raw.indexOf('$');
+  if (!routes.length) {
+    return [];
+  }
 
-      var episodeName = separator >= 0
-        ? raw.substring(0, separator)
-        : ('第' + (j + 1) + '集');
+  // Prefer simplified Chinese subtitles.
+  var selectedRoute = null;
 
-      var episodeUrl = separator >= 0
-        ? raw.substring(separator + 1)
-        : raw;
-
-      episodeUrl = String(episodeUrl || '').trim();
-
-      if (!episodeUrl) continue;
-
-      result.push({
-        id: String(i) + ':' + String(j),
-
-        number: j + 1,
-
-        title: _clean(episodeName)
-          || ('Episode ' + (j + 1)),
-
-        url: 'girigirilove://'
-          + encodeURIComponent(routeName)
-          + '/'
-          + encodeURIComponent(episodeUrl)
-      });
+  for (var r = 0; r < routes.length; r++) {
+    if (
+      routes[r].name === 'chs' ||
+      routes[r].name.indexOf('chs') >= 0
+    ) {
+      selectedRoute = routes[r];
+      break;
     }
+  }
+
+  // Fallback to the first available route.
+  if (!selectedRoute) {
+    selectedRoute = routes[0];
+  }
+
+  var result = [];
+  var entries = selectedRoute.entries;
+
+  for (var j = 0; j < entries.length; j++) {
+    var raw = String(entries[j] || '').trim();
+
+    if (!raw) continue;
+
+    var separator = raw.indexOf('$');
+
+    var episodeName = separator >= 0
+      ? raw.substring(0, separator).trim()
+      : ('第' + (j + 1) + '集');
+
+    var episodeUrl = separator >= 0
+      ? raw.substring(separator + 1).trim()
+      : raw;
+
+    if (!episodeUrl) continue;
+
+    // Keep the original m3u8 URL.
+    result.push({
+      id: String(selectedRoute.index) + ':' + String(j),
+
+      number: j + 1,
+
+      title: _clean(episodeName)
+        || ('Episode ' + (j + 1)),
+
+      url: episodeUrl
+    });
   }
 
   return result;
@@ -412,23 +448,6 @@ function getEpisodes(url, opts) {
 // Player URL helpers
 // --------------------------------------------------
 
-function _decodeEpisodeUrl(value) {
-  var s = String(value || '')
-    .replace(/^girigirilove:\/\//, '');
-
-  var slash = s.indexOf('/');
-
-  if (slash >= 0) {
-    s = s.substring(slash + 1);
-  }
-
-  try {
-    return decodeURIComponent(s);
-  } catch (e) {
-    return s;
-  }
-}
-
 function _absolute(url, base) {
   var value = String(url || '').trim();
 
@@ -454,68 +473,23 @@ function _absolute(url, base) {
 }
 
 // --------------------------------------------------
-// Extract playable links
-// --------------------------------------------------
-
-function _extractPlayable(body, base) {
-  var text = String(body || '');
-
-  var found = [];
-  var seen = {};
-
-  var patterns = [
-    /https?:\\?\/\\?\/[^"'\\\s<>]+?\.m3u8(?:\?[^"'\\\s<>]*)?/ig,
-
-    /https?:\\?\/\\?\/[^"'\\\s<>]+?\.mp4(?:\?[^"'\\\s<>]*)?/ig,
-
-    /(?:file|url|src)\s*[:=]\s*["']([^"']+)["']/ig
-  ];
-
-  for (var p = 0; p < patterns.length; p++) {
-    var match;
-
-    while ((match = patterns[p].exec(text)) !== null) {
-      var candidate = (match[1] || match[0])
-        .replace(/\\\//g, '/')
-        .replace(/&amp;/g, '&');
-
-      candidate = _absolute(candidate, base);
-
-      if (
-        /^https?:\/\//i.test(candidate)
-        && !seen[candidate]
-      ) {
-        seen[candidate] = true;
-        found.push(candidate);
-      }
-    }
-  }
-
-  return found;
-}
-
-// --------------------------------------------------
 // Video source conversion
 // --------------------------------------------------
 
-function _makeStreams(urls, ref) {
-  return urls.map(function (url, index) {
-    return {
-      url: url,
+function _makeStreams(url) {
+  return [{
+    url: url,
 
-      quality: index === 0
-        ? 'auto'
-        : 'source ' + (index + 1),
+    quality: 'auto',
 
-      container: /\.m3u8(\?|$)/i.test(url)
-        ? 'hls'
-        : 'mp4',
+    container: /\.m3u8(\?|$)/i.test(url)
+      ? 'hls'
+      : 'mp4',
 
-      headers: _headers(ref),
+    headers: _headers(SITE + '/'),
 
-      kind: 'sub'
-    };
-  });
+    kind: 'sub'
+  }];
 }
 
 // --------------------------------------------------
@@ -523,7 +497,7 @@ function _makeStreams(urls, ref) {
 // --------------------------------------------------
 
 function getVideoSources(episodeUrl) {
-  var target = _decodeEpisodeUrl(episodeUrl);
+  var target = String(episodeUrl || '').trim();
 
   if (!target) {
     return Promise.reject(
@@ -531,78 +505,34 @@ function getVideoSources(episodeUrl) {
     );
   }
 
-  var url = PLAYER
-    + '?key=0&url='
-    + encodeURIComponent(target);
+  // Support old 1.0.3 episode URLs.
+  if (/^girigirilove:\/\//i.test(target)) {
+    target = target.replace(/^girigirilove:\/\//i, '');
 
-  return _get(url, SITE + '/').then(function (body) {
-    var streams = _extractPlayable(body, PLAYER);
+    var slash = target.indexOf('/');
 
-    if (streams.length) {
-      return _makeStreams(streams, PLAYER);
+    if (slash >= 0) {
+      target = target.substring(slash + 1);
     }
-
-    // JSON response
-    var json = null;
 
     try {
-      json = JSON.parse(body || 'null');
+      target = decodeURIComponent(target);
     } catch (e) {
-      json = null;
+      // Keep original value if decoding fails.
     }
+  }
 
-    if (json) {
-      var direct = json.url
-        || json.src
-        || json.file
-        || (
-          json.data && (
-            json.data.url
-            || json.data.src
-            || json.data.file
-          )
-        );
+  target = _absolute(target, SITE);
 
-      if (direct) {
-        return _makeStreams(
-          [_absolute(direct, PLAYER)],
-          PLAYER
-        );
-      }
-    }
-
-    // iframe response
-    var iframe = (
-      body.match(/<iframe[^>]+src=["']([^"']+)["']/i) || []
-    )[1];
-
-    if (iframe) {
-      var iframeUrl = _absolute(
-        iframe.replace(/&amp;/g, '&'),
-        PLAYER
-      );
-
-      return _get(iframeUrl, PLAYER).then(function (inner) {
-        var links = _extractPlayable(inner, iframeUrl);
-
-        if (!links.length) {
-          throw new Error(
-            'GirigiriLove: no playable stream found'
-          );
-        }
-
-        return _makeStreams(links, iframeUrl);
-      });
-    }
-
-    throw new Error(
-      'GirigiriLove: player did not expose a playable URL'
+  if (!/^https?:\/\//i.test(target)) {
+    return Promise.reject(
+      new Error('GirigiriLove: invalid episode URL')
     );
-  }).catch(function (error) {
-    console.log(
-      '[GirigiriLove] getVideoSources failed: ' + String(error)
-    );
+  }
 
-    throw error;
-  });
+  // The API already provides a direct m3u8 URL.
+  // Do not wrap it with girigirilove:// or scrape atom.php.
+  return Promise.resolve(
+    _makeStreams(target)
+  );
 }
