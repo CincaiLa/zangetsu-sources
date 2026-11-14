@@ -1,4 +1,4 @@
-const baseUrl = "https://anime.girigirilove.com"; // 确保这是你当前能打开的最新可用域名
+const baseUrl = "https://ani.girigirilove.com"; // 更新为电脑实际访问跳转后的最新域名
 
 const Provider = {
     id: "girigirilove",
@@ -7,7 +7,7 @@ const Provider = {
     lang: "zh",
     type: "anime",
 
-    // 1. 首页/推荐列表：直接调用苹果CMS的 api.php 接口获取最新动漫
+    // 1. 首页/推荐列表：通过苹果CMS接口获取
     async getPopular(page = 1) {
         try {
             const url = `${baseUrl}/api.php/provide/vod?ac=detail&pg=${page}`;
@@ -20,7 +20,6 @@ const Provider = {
                 title: item.vod_name,
                 url: `${baseUrl}/index.php/vod/detail/id/${item.vod_id}.html`,
                 cover: item.vod_pic,
-                // 顺便可以带上更新状态或集数
                 description: item.vod_remarks || ''
             }));
         } catch (e) {
@@ -28,7 +27,7 @@ const Provider = {
         }
     },
 
-    // 2. 搜索功能：同样对接 api.php 接口，百分之百精准
+    // 2. 搜索功能
     async search(query, page = 1) {
         try {
             const url = `${baseUrl}/api.php/provide/vod?ac=detail&wd=${encodeURIComponent(query)}&pg=${page}`;
@@ -50,7 +49,6 @@ const Provider = {
 
     // 3. 获取详情与剧集列表
     async getDetail(url) {
-        // 如果 url 是 API 详情页，或者我们直接通过网页抓取详情
         const res = await fetch(url);
         const html = await res.text();
         const $ = cheerio.load(html);
@@ -60,7 +58,6 @@ const Provider = {
         const cover = $('.detail-pic img, .lazyload').attr('data-original') || $('.detail-pic img').attr('src');
 
         const episodes = [];
-        // 匹配剧集播放列表
         $('.play_list_box a, .anthology-list-play a, .num-list a').each((_, el) => {
             const epUrl = $(el).attr('href');
             episodes.push({
