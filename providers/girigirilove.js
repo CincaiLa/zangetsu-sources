@@ -16,7 +16,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/favicon.ico',
     type: 'anime',
-    version: '1.0.1'
+    version: '1.0.2'
   };
 }
 
